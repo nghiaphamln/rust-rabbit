@@ -1,6 +1,5 @@
 use rust_rabbit::{
     connection::ConnectionManager, retry::DelayedMessageExchange, retry::RetryPolicy, RabbitConfig,
-    RustRabbit,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

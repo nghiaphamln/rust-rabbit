@@ -1,6 +1,6 @@
 //! # RustRabbit
 //!
-//! A high-performance, production-ready RabbitMQ client library for Rust with advanced 
+//! A high-performance, production-ready RabbitMQ client library for Rust with advanced
 //! observability, resilience, and performance features.
 //!
 //! ## Features
