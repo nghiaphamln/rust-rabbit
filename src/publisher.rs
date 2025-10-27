@@ -350,6 +350,192 @@ pub struct PublishOptions {
     pub exchange_options: CustomExchangeDeclareOptions,
 }
 
+impl PublishOptions {
+    /// Create a new publish options builder
+    pub fn builder() -> PublishOptionsBuilder {
+        PublishOptionsBuilder::new()
+    }
+}
+
+/// Builder for PublishOptions
+#[derive(Debug, Clone)]
+pub struct PublishOptionsBuilder {
+    persistent: bool,
+    message_id: Option<String>,
+    correlation_id: Option<String>,
+    reply_to: Option<String>,
+    ttl: Option<Duration>,
+    priority: Option<u8>,
+    headers: HashMap<String, lapin::types::AMQPValue>,
+    auto_declare_queue: bool,
+    auto_declare_exchange: bool,
+    queue_options: CustomQueueDeclareOptions,
+    exchange_options: CustomExchangeDeclareOptions,
+}
+
+impl PublishOptionsBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            persistent: true,
+            message_id: Some(Uuid::new_v4().to_string()),
+            correlation_id: None,
+            reply_to: None,
+            ttl: None,
+            priority: None,
+            headers: HashMap::new(),
+            auto_declare_queue: false,
+            auto_declare_exchange: false,
+            queue_options: CustomQueueDeclareOptions::default(),
+            exchange_options: CustomExchangeDeclareOptions::default(),
+        }
+    }
+
+    /// Set message persistence
+    pub fn persistent(mut self, persistent: bool) -> Self {
+        self.persistent = persistent;
+        self
+    }
+
+    /// Make message persistent
+    pub fn durable(mut self) -> Self {
+        self.persistent = true;
+        self
+    }
+
+    /// Make message non-persistent
+    pub fn transient(mut self) -> Self {
+        self.persistent = false;
+        self
+    }
+
+    /// Set message ID
+    pub fn message_id<S: Into<String>>(mut self, id: S) -> Self {
+        self.message_id = Some(id.into());
+        self
+    }
+
+    /// Generate random message ID
+    pub fn random_message_id(mut self) -> Self {
+        self.message_id = Some(Uuid::new_v4().to_string());
+        self
+    }
+
+    /// Clear message ID
+    pub fn no_message_id(mut self) -> Self {
+        self.message_id = None;
+        self
+    }
+
+    /// Set correlation ID
+    pub fn correlation_id<S: Into<String>>(mut self, id: S) -> Self {
+        self.correlation_id = Some(id.into());
+        self
+    }
+
+    /// Set reply-to queue
+    pub fn reply_to<S: Into<String>>(mut self, queue: S) -> Self {
+        self.reply_to = Some(queue.into());
+        self
+    }
+
+    /// Set message TTL
+    pub fn ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = Some(ttl);
+        self
+    }
+
+    /// Set message priority
+    pub fn priority(mut self, priority: u8) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// Add a custom header
+    pub fn header<S: Into<String>>(mut self, key: S, value: lapin::types::AMQPValue) -> Self {
+        self.headers.insert(key.into(), value);
+        self
+    }
+
+    /// Add a string header
+    pub fn header_string<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
+        self.headers.insert(
+            key.into(), 
+            lapin::types::AMQPValue::LongString(value.into().into())
+        );
+        self
+    }
+
+    /// Add an integer header
+    pub fn header_int<K: Into<String>>(mut self, key: K, value: i64) -> Self {
+        self.headers.insert(key.into(), lapin::types::AMQPValue::LongLongInt(value));
+        self
+    }
+
+    /// Enable auto-declare queue
+    pub fn auto_declare_queue(mut self) -> Self {
+        self.auto_declare_queue = true;
+        self
+    }
+
+    /// Enable auto-declare exchange
+    pub fn auto_declare_exchange(mut self) -> Self {
+        self.auto_declare_exchange = true;
+        self
+    }
+
+    /// Set queue options
+    pub fn queue_options(mut self, options: CustomQueueDeclareOptions) -> Self {
+        self.queue_options = options;
+        self
+    }
+
+    /// Set exchange options
+    pub fn exchange_options(mut self, options: CustomExchangeDeclareOptions) -> Self {
+        self.exchange_options = options;
+        self
+    }
+
+    /// Configure for request-response pattern
+    pub fn request_response<S: Into<String>>(mut self, reply_to: S, correlation_id: S) -> Self {
+        self.reply_to = Some(reply_to.into());
+        self.correlation_id = Some(correlation_id.into());
+        self
+    }
+
+    /// Configure for development (auto-declare everything)
+    pub fn development(mut self) -> Self {
+        self.auto_declare_queue = true;
+        self.auto_declare_exchange = true;
+        self
+    }
+
+    /// Configure for production (no auto-declare)
+    pub fn production(mut self) -> Self {
+        self.auto_declare_queue = false;
+        self.auto_declare_exchange = false;
+        self.persistent = true;
+        self
+    }
+
+    /// Build the final options
+    pub fn build(self) -> PublishOptions {
+        PublishOptions {
+            persistent: self.persistent,
+            message_id: self.message_id,
+            correlation_id: self.correlation_id,
+            reply_to: self.reply_to,
+            ttl: self.ttl,
+            priority: self.priority,
+            headers: self.headers,
+            auto_declare_queue: self.auto_declare_queue,
+            auto_declare_exchange: self.auto_declare_exchange,
+            queue_options: self.queue_options,
+            exchange_options: self.exchange_options,
+        }
+    }
+}
+
 impl Default for PublishOptions {
     fn default() -> Self {
         Self {

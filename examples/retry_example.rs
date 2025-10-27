@@ -16,7 +16,7 @@ struct TaskMessage {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
     // Create configuration
     let config = RabbitConfig {

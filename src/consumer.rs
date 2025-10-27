@@ -91,6 +91,156 @@ pub struct ConsumerOptions {
     pub arguments: FieldTable,
 }
 
+impl ConsumerOptions {
+    /// Create a new consumer options builder
+    pub fn builder<S: Into<String>>(queue_name: S) -> ConsumerOptionsBuilder {
+        ConsumerOptionsBuilder::new(queue_name.into())
+    }
+}
+
+/// Builder for ConsumerOptions
+#[derive(Debug, Clone)]
+pub struct ConsumerOptionsBuilder {
+    queue_name: String,
+    consumer_tag: Option<String>,
+    concurrency: usize,
+    prefetch_count: Option<u16>,
+    auto_declare_queue: bool,
+    queue_options: CustomQueueDeclareOptions,
+    retry_policy: Option<RetryPolicy>,
+    dead_letter_exchange: Option<String>,
+    auto_ack: bool,
+    exclusive: bool,
+    arguments: FieldTable,
+}
+
+impl ConsumerOptionsBuilder {
+    /// Create a new builder with default values
+    pub fn new(queue_name: String) -> Self {
+        Self {
+            queue_name,
+            consumer_tag: None,
+            concurrency: 1,
+            prefetch_count: Some(10),
+            auto_declare_queue: false,
+            queue_options: CustomQueueDeclareOptions::default(),
+            retry_policy: None,
+            dead_letter_exchange: None,
+            auto_ack: false,
+            exclusive: false,
+            arguments: FieldTable::default(),
+        }
+    }
+
+    /// Set consumer tag
+    pub fn consumer_tag<S: Into<String>>(mut self, tag: S) -> Self {
+        self.consumer_tag = Some(tag.into());
+        self
+    }
+
+    /// Set concurrency level
+    pub fn concurrency(mut self, concurrency: usize) -> Self {
+        self.concurrency = concurrency;
+        self
+    }
+
+    /// Set prefetch count
+    pub fn prefetch_count(mut self, count: u16) -> Self {
+        self.prefetch_count = Some(count);
+        self
+    }
+
+    /// Disable prefetch limit
+    pub fn no_prefetch_limit(mut self) -> Self {
+        self.prefetch_count = None;
+        self
+    }
+
+    /// Enable auto-declare queue
+    pub fn auto_declare_queue(mut self) -> Self {
+        self.auto_declare_queue = true;
+        self
+    }
+
+    /// Set queue options
+    pub fn queue_options(mut self, options: CustomQueueDeclareOptions) -> Self {
+        self.queue_options = options;
+        self
+    }
+
+    /// Set retry policy
+    pub fn retry_policy(mut self, policy: RetryPolicy) -> Self {
+        self.retry_policy = Some(policy);
+        self
+    }
+
+    /// Set dead letter exchange
+    pub fn dead_letter_exchange<S: Into<String>>(mut self, exchange: S) -> Self {
+        self.dead_letter_exchange = Some(exchange.into());
+        self
+    }
+
+    /// Enable auto-ack (not recommended for production)
+    pub fn auto_ack(mut self) -> Self {
+        self.auto_ack = true;
+        self
+    }
+
+    /// Enable manual ack (recommended for production)
+    pub fn manual_ack(mut self) -> Self {
+        self.auto_ack = false;
+        self
+    }
+
+    /// Enable exclusive mode
+    pub fn exclusive(mut self) -> Self {
+        self.exclusive = true;
+        self
+    }
+
+    /// Configure for high throughput
+    pub fn high_throughput(mut self) -> Self {
+        self.concurrency = 20;
+        self.prefetch_count = Some(50);
+        self.auto_ack = false;
+        self
+    }
+
+    /// Configure for reliability (lower throughput but safer)
+    pub fn reliable(mut self) -> Self {
+        self.concurrency = 1;
+        self.prefetch_count = Some(1);
+        self.auto_ack = false;
+        self
+    }
+
+    /// Configure for development (simpler settings)
+    pub fn development(mut self) -> Self {
+        self.concurrency = 1;
+        self.prefetch_count = Some(1);
+        self.auto_ack = true;
+        self.auto_declare_queue = true;
+        self
+    }
+
+    /// Build the final configuration
+    pub fn build(self) -> ConsumerOptions {
+        ConsumerOptions {
+            queue_name: self.queue_name,
+            consumer_tag: self.consumer_tag,
+            concurrency: self.concurrency,
+            prefetch_count: self.prefetch_count,
+            auto_declare_queue: self.auto_declare_queue,
+            queue_options: self.queue_options,
+            retry_policy: self.retry_policy,
+            dead_letter_exchange: self.dead_letter_exchange,
+            auto_ack: self.auto_ack,
+            exclusive: self.exclusive,
+            arguments: self.arguments,
+        }
+    }
+}
+
 impl Default for ConsumerOptions {
     fn default() -> Self {
         Self {

@@ -7,9 +7,14 @@ pub mod retry;
 pub mod health;
 
 pub use connection::{Connection, ConnectionManager};
-pub use publisher::{Publisher, PublishOptions, CustomQueueDeclareOptions, CustomExchangeDeclareOptions};
-pub use consumer::{Consumer, ConsumerOptions, MessageHandler};
-pub use config::{RabbitConfig, RetryConfig};
+pub use publisher::{Publisher, PublishOptions, PublishOptionsBuilder, CustomQueueDeclareOptions, CustomExchangeDeclareOptions};
+pub use consumer::{Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler};
+pub use config::{
+    RabbitConfig, RabbitConfigBuilder,
+    RetryConfig, RetryConfigBuilder,
+    HealthCheckConfig, HealthCheckConfigBuilder,
+    PoolConfig, PoolConfigBuilder,
+};
 pub use error::{RabbitError, Result};
 pub use retry::{RetryPolicy, DelayedMessageExchange};
 pub use health::{HealthChecker, ConnectionStatus};

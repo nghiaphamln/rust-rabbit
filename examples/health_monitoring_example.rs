@@ -9,7 +9,7 @@ use tracing::{info, warn};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
     // Create configuration with aggressive health checking
     let mut config = RabbitConfig {

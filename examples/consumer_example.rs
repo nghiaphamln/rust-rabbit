@@ -1,7 +1,8 @@
 use rust_rabbit::{
-    RustRabbit, RabbitConfig, ConsumerOptions, MessageHandler, MessageContext, MessageResult,
+    RustRabbit, RabbitConfig, ConsumerOptions, MessageHandler,
     retry::RetryPolicy,
 };
+use rust_rabbit::consumer::{MessageContext, MessageResult};
 use serde::{Serialize, Deserialize};
 use std::{sync::Arc, time::Duration};
 use tracing::{info, error};
@@ -48,7 +49,7 @@ impl MessageHandler<OrderMessage> for OrderHandler {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
-    tracing_subscriber::init();
+    tracing_subscriber::fmt::init();
 
     // Create configuration
     let config = RabbitConfig {

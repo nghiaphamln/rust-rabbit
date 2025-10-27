@@ -27,7 +27,7 @@ serde = { version = "1.0", features = ["derive"] }
 ### Basic Publisher Example
 
 ```rust
-use rust_rabbit::{RustRabbit, RabbitConfig, PublishOptions};
+use rust_rabbit::{RustRabbit, RabbitConfig};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
@@ -38,8 +38,13 @@ struct OrderMessage {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create configuration
-    let config = RabbitConfig::default();
+    // Create configuration using builder pattern
+    let config = RabbitConfig::builder()
+        .connection_string("amqp://localhost:5672")
+        .virtual_host("my-app")
+        .retry(|retry| retry.max_retries(5).aggressive())
+        .pool(|pool| pool.high_throughput())
+        .build();
     
     // Create RustRabbit instance
     let rabbit = RustRabbit::new(config).await?;
@@ -51,7 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         amount: 99.99,
     };
     
-    publisher.publish_to_queue("orders", &order, None).await?;
+    // Use builder for publish options
+    let options = rust_rabbit::PublishOptions::builder()
+        .durable()
+        .auto_declare_queue()
+        .header_string("source", "order-service")
+        .build();
+    
+    publisher.publish_to_queue("orders", &order, Some(options)).await?;
     
     Ok(())
 }
@@ -87,15 +99,19 @@ impl MessageHandler<OrderMessage> for OrderHandler {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = RabbitConfig::default();
+    let config = RabbitConfig::builder()
+        .connection_string("amqp://localhost:5672")
+        .build();
+        
     let rabbit = RustRabbit::new(config).await?;
     
-    let consumer_options = ConsumerOptions {
-        queue_name: "orders".to_string(),
-        concurrency: 5,
-        auto_declare_queue: true,
-        ..Default::default()
-    };
+    // Use builder for consumer options
+    let consumer_options = ConsumerOptions::builder("orders")
+        .consumer_tag("order-processor")
+        .concurrency(5)
+        .auto_declare_queue()
+        .reliable()
+        .build();
     
     let consumer = rabbit.consumer(consumer_options).await?;
     let handler = Arc::new(OrderHandler);
@@ -181,57 +197,48 @@ health_checker.wait_for_healthy(Some(Duration::from_secs(30))).await?;
 
 ### Connection Pooling
 
-RustRabbit automatically manages connection pools:
+RustRabbit automatically manages connection pools with builder pattern:
 
 ```rust
-use rust_rabbit::config::{RabbitConfig, PoolConfig, RetryConfig};
+use rust_rabbit::RabbitConfig;
 
-let config = RabbitConfig {
-    connection_string: "amqp://localhost:5672".to_string(),
-    pool_config: PoolConfig {
-        max_connections: 20,
-        min_connections: 2,
-        idle_timeout: Duration::from_secs(300),
-    },
-    retry_config: RetryConfig {
-        max_retries: 3,
-        initial_delay: Duration::from_millis(1000),
-        max_delay: Duration::from_secs(60),
-        backoff_multiplier: 2.0,
-        jitter: 0.1,
-    },
-    ..Default::default()
-};
+let config = RabbitConfig::builder()
+    .connection_string("amqp://localhost:5672")
+    .retry(|retry| {
+        retry
+            .max_retries(3)
+            .initial_delay(Duration::from_millis(1000))
+            .max_delay(Duration::from_secs(60))
+            .backoff_multiplier(2.0)
+            .jitter(0.1)
+    })
+    .pool(|pool| {
+        pool
+            .max_connections(20)
+            .min_connections(2)
+            .idle_timeout(Duration::from_secs(300))
+    })
+    .build();
 ```
 
 ### Message Options
 
-Customize message publishing with various options:
+Customize message publishing with builder pattern:
 
 ```rust
-use rust_rabbit::{PublishOptions, publisher::ExchangeDeclareOptions};
-use std::collections::HashMap;
+use rust_rabbit::PublishOptions;
 
-let mut options = PublishOptions {
-    persistent: true,
-    message_id: Some("MSG-12345".to_string()),
-    correlation_id: Some("CORR-67890".to_string()),
-    ttl: Some(Duration::from_secs(300)),
-    priority: Some(5),
-    auto_declare_exchange: true,
-    exchange_options: ExchangeDeclareOptions {
-        durable: true,
-        exchange_type: lapin::ExchangeKind::Topic,
-        ..Default::default()
-    },
-    ..Default::default()
-};
-
-// Add custom headers
-options.headers.insert(
-    "custom-header".to_string(),
-    lapin::types::AMQPValue::LongString("custom-value".into())
-);
+let options = PublishOptions::builder()
+    .durable()
+    .message_id("MSG-12345")
+    .correlation_id("CORR-67890")
+    .ttl(Duration::from_secs(300))
+    .priority(5)
+    .header_string("source", "order-service")
+    .header_int("version", 1)
+    .auto_declare_exchange()
+    .development()
+    .build();
 
 publisher.publish_to_exchange(
     "my-exchange",
@@ -241,59 +248,101 @@ publisher.publish_to_exchange(
 ).await?;
 ```
 
+## Configuration with Builder Pattern
+
+### Environment-Specific Configurations
+
+```rust
+// Development configuration
+let dev_config = RabbitConfig::builder()
+    .connection_string("amqp://localhost:5672")
+    .retry(|retry| retry.conservative())
+    .health(|health| health.infrequent())
+    .pool(|pool| pool.single_connection())
+    .build();
+
+// Production configuration
+let prod_config = RabbitConfig::builder()
+    .connection_string("amqp://prod-server:5672")
+    .connection_timeout(Duration::from_secs(30))
+    .retry(|retry| retry.aggressive())
+    .health(|health| health.frequent())
+    .pool(|pool| pool.high_throughput())
+    .build();
+```
+
+### Consumer Configuration
+
+```rust
+// High throughput consumer
+let high_throughput_options = ConsumerOptions::builder("orders")
+    .consumer_tag("bulk-processor")
+    .high_throughput()
+    .auto_declare_queue()
+    .dead_letter_exchange("failed-orders")
+    .build();
+
+// Reliable consumer
+let reliable_options = ConsumerOptions::builder("critical-orders")
+    .consumer_tag("critical-processor")
+    .reliable()
+    .manual_ack()
+    .prefetch_count(1)
+    .build();
+```
+
 ## Configuration
 
 ### RabbitConfig
 
-The main configuration struct for RustRabbit:
+The main configuration struct with builder pattern:
 
 ```rust
-use rust_rabbit::config::{RabbitConfig, RetryConfig, HealthCheckConfig, PoolConfig};
+use rust_rabbit::RabbitConfig;
 
-let config = RabbitConfig {
-    connection_string: "amqp://user:pass@localhost:5672".to_string(),
-    virtual_host: Some("/my-vhost".to_string()),
-    connection_timeout: Some(Duration::from_secs(30)),
-    heartbeat: Some(Duration::from_secs(60)),
-    retry_config: RetryConfig {
-        max_retries: 3,
-        initial_delay: Duration::from_millis(1000),
-        max_delay: Duration::from_secs(60),
-        backoff_multiplier: 2.0,
-        jitter: 0.1,
-    },
-    health_check: HealthCheckConfig {
-        check_interval: Duration::from_secs(30),
-        check_timeout: Duration::from_secs(5),
-        enabled: true,
-    },
-    pool_config: PoolConfig {
-        max_connections: 10,
-        min_connections: 1,
-        idle_timeout: Duration::from_secs(300),
-    },
-};
+let config = RabbitConfig::builder()
+    .connection_string("amqp://user:pass@localhost:5672")
+    .virtual_host("my-vhost")
+    .connection_timeout(Duration::from_secs(30))
+    .heartbeat(Duration::from_secs(60))
+    .retry(|retry| {
+        retry
+            .max_retries(3)
+            .initial_delay(Duration::from_millis(1000))
+            .max_delay(Duration::from_secs(60))
+            .backoff_multiplier(2.0)
+            .jitter(0.1)
+    })
+    .health(|health| {
+        health
+            .check_interval(Duration::from_secs(30))
+            .check_timeout(Duration::from_secs(5))
+            .enabled()
+    })
+    .pool(|pool| {
+        pool
+            .max_connections(10)
+            .min_connections(1)
+            .idle_timeout(Duration::from_secs(300))
+    })
+    .build();
 ```
 
 ### Consumer Options
 
-Configure consumer behavior:
+Configure consumer behavior with builder:
 
 ```rust
-use rust_rabbit::{ConsumerOptions, retry::RetryPolicy};
+use rust_rabbit::ConsumerOptions;
 
-let consumer_options = ConsumerOptions {
-    queue_name: "my-queue".to_string(),
-    consumer_tag: Some("my-consumer".to_string()),
-    concurrency: 10,
-    prefetch_count: Some(20),
-    auto_declare_queue: true,
-    retry_policy: Some(RetryPolicy::default()),
-    dead_letter_exchange: Some("failed-messages".to_string()),
-    auto_ack: false,
-    exclusive: false,
-    ..Default::default()
-};
+let consumer_options = ConsumerOptions::builder("my-queue")
+    .consumer_tag("my-consumer")
+    .concurrency(10)
+    .prefetch_count(20)
+    .auto_declare_queue()
+    .dead_letter_exchange("failed-messages")
+    .manual_ack()
+    .build();
 ```
 
 ## Error Handling
@@ -331,6 +380,7 @@ rabbitmq-plugins enable rabbitmq_delayed_message_exchange
 
 Check out the `examples/` directory for more comprehensive examples:
 
+- `builder_pattern_example.rs` - Comprehensive builder pattern usage
 - `publisher_example.rs` - Various publishing patterns
 - `consumer_example.rs` - Consumer with retry and error handling
 - `retry_example.rs` - Advanced retry mechanisms
@@ -339,6 +389,7 @@ Check out the `examples/` directory for more comprehensive examples:
 Run examples with:
 
 ```bash
+cargo run --example builder_pattern_example
 cargo run --example publisher_example
 cargo run --example consumer_example
 cargo run --example retry_example
