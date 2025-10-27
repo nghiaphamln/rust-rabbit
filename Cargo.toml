@@ -1,8 +1,8 @@
 [package]
 name = "rust-rabbit"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "A Rust library similar to MassTransit for RabbitMQ messaging with publisher/consumer pattern and advanced retry mechanisms"
+description = "A high-performance Rust library for RabbitMQ messaging with advanced features: metrics, circuit breaker, batching, and graceful shutdown"
 license = "MIT"
 authors = ["Minh Nghĩa <nghiaphamln3@gmail.com>"]
 repository = "https://github.com/nghiaphamln/rust-rabbit"
@@ -49,7 +49,17 @@ config = "0.14"
 # Random number generation
 fastrand = "2.0"
 
+# Metrics and observability
+prometheus = "0.14"
+metrics = "0.22"
+metrics-prometheus = "0.11"
+
+# Force secure version of protobuf due to RUSTSEC-2024-0437
+protobuf = ">=3.7.2"
+
 [dev-dependencies]
+# Web server for metrics endpoint in examples
+warp = "0.3"
 tokio-test = "0.4"
 mockall = "0.12"
 anyhow = "1.0"

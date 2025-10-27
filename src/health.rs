@@ -2,6 +2,7 @@ use crate::{
     config::HealthCheckConfig,
     connection::{ConnectionManager, ConnectionStats},
     error::{RabbitError, Result},
+    metrics::RustRabbitMetrics,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -59,6 +60,7 @@ pub struct HealthChecker {
     config: HealthCheckConfig,
     last_result: Arc<RwLock<Option<HealthCheckResult>>>,
     monitoring_started: Arc<RwLock<bool>>,
+    metrics: Option<RustRabbitMetrics>,
 }
 
 impl HealthChecker {
@@ -71,7 +73,13 @@ impl HealthChecker {
             config,
             last_result: Arc::new(RwLock::new(None)),
             monitoring_started: Arc::new(RwLock::new(false)),
+            metrics: None,
         }
+    }
+
+    /// Set metrics for this health checker
+    pub fn set_metrics(&mut self, metrics: RustRabbitMetrics) {
+        self.metrics = Some(metrics);
     }
 
     /// Start continuous health monitoring in the background

@@ -1,4 +1,5 @@
 use crate::{
+    circuit_breaker::{CircuitBreaker, CircuitBreakerConfig},
     config::RabbitConfig,
     error::{RabbitError, Result},
 };
@@ -49,6 +50,14 @@ impl Connection {
     }
 }
 
+/// Connection statistics
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ConnectionStats {
+    pub total_connections: usize,
+    pub healthy_connections: usize,
+    pub unhealthy_connections: usize,
+}
+
 /// Connection manager with pooling and health monitoring
 #[derive(Debug, Clone)]
 pub struct ConnectionManager {
@@ -56,15 +65,26 @@ pub struct ConnectionManager {
     connections: Arc<RwLock<Vec<Arc<Connection>>>>,
     #[allow(dead_code)] // Will be used for connection tracking in future versions
     connection_counter: Arc<Mutex<usize>>,
+    #[allow(dead_code)]
+    circuit_breaker: Arc<CircuitBreaker>,
 }
 
 impl ConnectionManager {
     /// Create a new connection manager
     pub async fn new(config: RabbitConfig) -> Result<Self> {
+        let circuit_breaker_config = CircuitBreakerConfig {
+            failure_threshold: 5,
+            failure_window: Duration::from_secs(60),
+            recovery_timeout: Duration::from_secs(30),
+            success_threshold: 3,
+            half_open_max_requests: 5,
+        };
+
         let manager = Self {
             config,
             connections: Arc::new(RwLock::new(Vec::new())),
             connection_counter: Arc::new(Mutex::new(0)),
+            circuit_breaker: Arc::new(CircuitBreaker::with_config(circuit_breaker_config)),
         };
 
         // Initialize minimum connections
@@ -276,12 +296,4 @@ impl ConnectionManager {
         info!("All connections closed");
         Ok(())
     }
-}
-
-/// Connection pool statistics
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ConnectionStats {
-    pub total_connections: usize,
-    pub healthy_connections: usize,
-    pub unhealthy_connections: usize,
 }

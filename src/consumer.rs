@@ -1,6 +1,7 @@
 use crate::{
     connection::ConnectionManager,
     error::{RabbitError, Result},
+    metrics::RustRabbitMetrics,
     publisher::CustomQueueDeclareOptions,
     retry::RetryPolicy,
 };
@@ -270,6 +271,7 @@ pub struct Consumer {
     options: ConsumerOptions,
     channel: Channel,
     semaphore: Arc<Semaphore>,
+    metrics: Option<RustRabbitMetrics>,
 }
 
 impl Consumer {
@@ -300,7 +302,13 @@ impl Consumer {
             options,
             channel,
             semaphore,
+            metrics: None,
         })
+    }
+
+    /// Set metrics for this consumer
+    pub fn set_metrics(&mut self, metrics: RustRabbitMetrics) {
+        self.metrics = Some(metrics);
     }
 
     /// Start consuming messages with the given handler

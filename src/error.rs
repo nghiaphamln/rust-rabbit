@@ -9,8 +9,14 @@ pub enum RabbitError {
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
+    #[error("Serialization error: {0}")]
+    SerializationError(String),
+
     #[error("Configuration error: {0}")]
     Configuration(String),
+
+    #[error("Channel error: {0}")]
+    ChannelError(String),
 
     #[error("Consumer error: {0}")]
     Consumer(String),

@@ -1,6 +1,7 @@
 use crate::{
     connection::ConnectionManager,
     error::{RabbitError, Result},
+    metrics::{MetricsTimer, RustRabbitMetrics},
 };
 use lapin::{
     options::{
@@ -19,12 +20,21 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct Publisher {
     connection_manager: ConnectionManager,
+    metrics: Option<RustRabbitMetrics>,
 }
 
 impl Publisher {
     /// Create a new publisher
     pub fn new(connection_manager: ConnectionManager) -> Self {
-        Self { connection_manager }
+        Self {
+            connection_manager,
+            metrics: None,
+        }
+    }
+
+    /// Set metrics for this publisher
+    pub fn set_metrics(&mut self, metrics: RustRabbitMetrics) {
+        self.metrics = Some(metrics);
     }
 
     /// Publish a message to a queue
@@ -37,6 +47,7 @@ impl Publisher {
     where
         T: Serialize,
     {
+        let timer = MetricsTimer::new();
         let channel = self.get_channel().await?;
 
         // Declare queue if auto_declare is enabled
@@ -49,7 +60,7 @@ impl Publisher {
         let payload = self.serialize_message(message)?;
         let properties = self.build_basic_properties(&options)?;
 
-        channel
+        let result = channel
             .basic_publish(
                 "", // default exchange
                 queue_name,
@@ -57,8 +68,23 @@ impl Publisher {
                 &payload,
                 properties,
             )
-            .await?;
+            .await;
 
+        // Record metrics
+        if let Some(metrics) = &self.metrics {
+            match &result {
+                Ok(_) => {
+                    metrics.record_message_published(queue_name, "", queue_name);
+                    metrics.record_publish_duration(queue_name, "", timer.elapsed());
+                }
+                Err(_) => {
+                    // Error will be handled by the caller, but we can still record timing
+                    metrics.record_publish_duration(queue_name, "", timer.elapsed());
+                }
+            }
+        }
+
+        result?;
         debug!("Published message to queue: {}", queue_name);
         Ok(())
     }
@@ -74,6 +100,7 @@ impl Publisher {
     where
         T: Serialize,
     {
+        let timer = MetricsTimer::new();
         let channel = self.get_channel().await?;
 
         // Declare exchange if auto_declare is enabled
@@ -86,7 +113,7 @@ impl Publisher {
         let payload = self.serialize_message(message)?;
         let properties = self.build_basic_properties(&options)?;
 
-        channel
+        let result = channel
             .basic_publish(
                 exchange_name,
                 routing_key,
@@ -94,8 +121,22 @@ impl Publisher {
                 &payload,
                 properties,
             )
-            .await?;
+            .await;
 
+        // Record metrics
+        if let Some(metrics) = &self.metrics {
+            match &result {
+                Ok(_) => {
+                    metrics.record_message_published("", exchange_name, routing_key);
+                    metrics.record_publish_duration("", exchange_name, timer.elapsed());
+                }
+                Err(_) => {
+                    metrics.record_publish_duration("", exchange_name, timer.elapsed());
+                }
+            }
+        }
+
+        result?;
         debug!(
             "Published message to exchange: {} with routing key: {}",
             exchange_name, routing_key
