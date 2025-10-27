@@ -1,5 +1,7 @@
 # Integration Tests với RabbitMQ
 
+> **📝 Lưu ý**: Integration tests chỉ chạy ở local, không chạy trong CI pipeline để tránh phức tạp và tốn thời gian setup RabbitMQ trên cloud.
+
 Thư viện RustRabbit có thể viết integration test với RabbitMQ thật một cách rất hiệu quả. Dưới đây là hướng dẫn chi tiết:
 
 ## 🐳 Setup với Docker
@@ -665,7 +667,29 @@ jobs:
 2. **Test Isolation**: Mỗi test sử dụng queue riêng biệt
 3. **Real Scenarios**: Test với RabbitMQ thật cho độ tin cậy cao
 4. **Performance Testing**: Benchmark thông lượng và latency
-5. **CI/CD Integration**: Chạy tự động trong GitHub Actions
+5. **Local Development Only**: Chỉ chạy ở local, không trong CI
+
+## 🚀 CI Pipeline Policy
+
+**CI Pipeline chỉ chạy:**
+- ✅ Unit tests (`cargo test --lib`)
+- ✅ Code formatting (`cargo fmt --check`) 
+- ✅ Linting (`cargo clippy`)
+- ✅ Documentation build (`cargo doc`)
+- ✅ Security audit (`cargo audit`)
+- ✅ Example compilation (`cargo check --examples`)
+
+**Integration tests được loại bỏ khỏi CI vì:**
+- ⏱️ Tốn thời gian setup RabbitMQ trên cloud
+- 🔧 Phức tạp về infrastructure requirements
+- 💰 Tốn tài nguyên CI/CD
+- 🏠 Tốt hơn khi test ở local với môi trường thật
+
+**Workflow khuyến nghị:**
+1. **Code changes** → Chạy unit tests trước
+2. **Feature complete** → Chạy integration tests ở local  
+3. **Ready to commit** → Push (CI sẽ chạy unit tests + quality checks)
+4. **Pre-release** → Chạy toàn bộ integration test suite ở local
 
 **Lợi ích của Integration Testing:**
 - Phát hiện vấn đề với RabbitMQ server thật
