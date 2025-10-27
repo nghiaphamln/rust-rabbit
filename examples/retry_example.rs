@@ -1,8 +1,8 @@
 use rust_rabbit::{
-    RustRabbit, RabbitConfig, retry::DelayedMessageExchange,
-    connection::ConnectionManager, retry::RetryPolicy,
+    connection::ConnectionManager, retry::DelayedMessageExchange, retry::RetryPolicy, RabbitConfig,
+    RustRabbit,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 
@@ -68,8 +68,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Simulate retry scenarios
     for retry_attempt in 0..3 {
-        info!("Publishing retry attempt {} for task: {}", retry_attempt, task.task_id);
-        
+        info!(
+            "Publishing retry attempt {} for task: {}",
+            retry_attempt, task.task_id
+        );
+
         delayed_exchange
             .publish_with_retry(
                 "task-queue",

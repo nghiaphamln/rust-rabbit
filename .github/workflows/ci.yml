@@ -1,0 +1,350 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test-unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, beta, nightly]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust }}
+        components: rustfmt, clippy
+        override: true
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Check formatting
+      run: cargo fmt -- --check
+      
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+      
+    - name: Build project
+      run: cargo build --verbose
+      
+    - name: Run unit tests
+      run: cargo test --lib --verbose
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      rabbitmq:
+        image: rabbitmq:3.12-management
+        ports:
+          - 5672:5672
+          - 15672:15672
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: password
+          RABBITMQ_DEFAULT_VHOST: test
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Wait for RabbitMQ
+      run: |
+        timeout 60 bash -c 'until timeout 1 bash -c "</dev/tcp/localhost/5672"; do sleep 1; done'
+        
+    - name: Verify RabbitMQ connection
+      run: |
+        # Test basic TCP connection
+        timeout 5 bash -c "</dev/tcp/localhost/5672"
+        echo "RabbitMQ is accessible on port 5672"
+        
+    - name: Run integration tests
+      run: |
+        cargo test --test integration_example -- --test-threads=1 --nocapture
+      env:
+        RUST_LOG: info
+
+  test-examples:
+    name: Example Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      rabbitmq:
+        image: rabbitmq:3.12-management
+        ports:
+          - 5672:5672
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: password
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-examples-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Wait for RabbitMQ
+      run: |
+        timeout 60 bash -c 'until timeout 1 bash -c "</dev/tcp/localhost/5672"; do sleep 1; done'
+        
+    - name: Check examples compile
+      run: |
+        cargo check --examples
+        
+    - name: Test builder pattern example (compile only)
+      run: |
+        cargo check --example builder_pattern_example
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+      
+    - name: Run security audit
+      run: cargo audit
+
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Build documentation
+      run: cargo doc --no-deps --all-features
+      
+    - name: Check for broken links in docs
+      run: |
+        # Check if docs build without warnings
+        cargo doc --no-deps --all-features 2>&1 | tee doc_output.log
+        if grep -i "warning\|error" doc_output.log; then
+          echo "Documentation has warnings or errors"
+          exit 1
+        fi
+
+  performance:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      rabbitmq:
+        image: rabbitmq:3.12-management
+        ports:
+          - 5672:5672
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: password
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-perf-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Wait for RabbitMQ
+      run: |
+        timeout 60 bash -c 'until timeout 1 bash -c "</dev/tcp/localhost/5672"; do sleep 1; done'
+        
+    - name: Run performance benchmarks
+      run: |
+        cargo test --test integration_example test_performance_benchmark -- --nocapture
+      env:
+        RUST_LOG: info
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    
+    services:
+      rabbitmq:
+        image: rabbitmq:3.12-management
+        ports:
+          - 5672:5672
+        env:
+          RABBITMQ_DEFAULT_USER: admin
+          RABBITMQ_DEFAULT_PASS: password
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: llvm-tools-preview
+        override: true
+        
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+      
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+          
+    - name: Wait for RabbitMQ
+      run: |
+        timeout 60 bash -c 'until timeout 1 bash -c "</dev/tcp/localhost/5672"; do sleep 1; done'
+        
+    - name: Generate coverage report
+      run: |
+        cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: lcov.info
+        fail_ci_if_error: true
+
+  release:
+    name: Release Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test-unit, test-integration, test-examples, security-audit, documentation]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        
+    - name: Check if ready for release
+      run: |
+        echo "All tests passed! Ready for release."
+        echo "Current version: $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+        
+    - name: Dry run cargo publish
+      run: |
+        cargo publish --dry-run

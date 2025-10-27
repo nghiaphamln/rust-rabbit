@@ -6,22 +6,22 @@ use std::time::Duration;
 pub struct RabbitConfig {
     /// RabbitMQ connection string (e.g., "amqp://localhost:5672")
     pub connection_string: String,
-    
+
     /// Virtual host (default: "/")
     pub virtual_host: Option<String>,
-    
+
     /// Connection timeout
     pub connection_timeout: Option<Duration>,
-    
+
     /// Heartbeat interval
     pub heartbeat: Option<Duration>,
-    
+
     /// Retry configuration for connections
     pub retry_config: RetryConfig,
-    
+
     /// Health check configuration
     pub health_check: HealthCheckConfig,
-    
+
     /// Connection pool configuration
     pub pool_config: PoolConfig,
 }
@@ -108,7 +108,7 @@ impl RabbitConfigBuilder {
     }
 
     /// Configure retry settings with a builder
-    pub fn retry<F>(mut self, f: F) -> Self 
+    pub fn retry<F>(mut self, f: F) -> Self
     where
         F: FnOnce(RetryConfigBuilder) -> RetryConfigBuilder,
     {
@@ -123,7 +123,7 @@ impl RabbitConfigBuilder {
     }
 
     /// Configure health check settings with a builder
-    pub fn health<F>(mut self, f: F) -> Self 
+    pub fn health<F>(mut self, f: F) -> Self
     where
         F: FnOnce(HealthCheckConfigBuilder) -> HealthCheckConfigBuilder,
     {
@@ -138,7 +138,7 @@ impl RabbitConfigBuilder {
     }
 
     /// Configure pool settings with a builder
-    pub fn pool<F>(mut self, f: F) -> Self 
+    pub fn pool<F>(mut self, f: F) -> Self
     where
         F: FnOnce(PoolConfigBuilder) -> PoolConfigBuilder,
     {
@@ -157,6 +157,12 @@ impl RabbitConfigBuilder {
             health_check: self.health_check,
             pool_config: self.pool_config,
         }
+    }
+}
+
+impl Default for RabbitConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -179,16 +185,16 @@ impl Default for RabbitConfig {
 pub struct RetryConfig {
     /// Maximum number of retry attempts
     pub max_retries: u32,
-    
+
     /// Initial delay between retries
     pub initial_delay: Duration,
-    
+
     /// Maximum delay between retries
     pub max_delay: Duration,
-    
+
     /// Multiplier for exponential backoff
     pub backoff_multiplier: f64,
-    
+
     /// Jitter factor (0.0 to 1.0) to add randomness to delays
     pub jitter: f64,
 }
@@ -290,6 +296,12 @@ impl RetryConfigBuilder {
     }
 }
 
+impl Default for RetryConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
@@ -307,10 +319,10 @@ impl Default for RetryConfig {
 pub struct HealthCheckConfig {
     /// Interval between health checks
     pub check_interval: Duration,
-    
+
     /// Timeout for each health check
     pub check_timeout: Duration,
-    
+
     /// Enable health monitoring
     pub enabled: bool,
 }
@@ -390,6 +402,12 @@ impl HealthCheckConfigBuilder {
     }
 }
 
+impl Default for HealthCheckConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for HealthCheckConfig {
     fn default() -> Self {
         Self {
@@ -405,10 +423,10 @@ impl Default for HealthCheckConfig {
 pub struct PoolConfig {
     /// Maximum number of connections in the pool
     pub max_connections: usize,
-    
+
     /// Minimum number of connections to maintain
     pub min_connections: usize,
-    
+
     /// Connection idle timeout
     pub idle_timeout: Duration,
 }
@@ -490,6 +508,12 @@ impl PoolConfigBuilder {
     }
 }
 
+impl Default for PoolConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
@@ -527,7 +551,7 @@ mod tests {
     #[test]
     fn test_health_check_config_presets() {
         use crate::health::HealthCheckConfigExt;
-        
+
         let conservative = HealthCheckConfig::conservative();
         assert_eq!(conservative.check_interval, Duration::from_secs(60));
         assert_eq!(conservative.check_timeout, Duration::from_secs(10));

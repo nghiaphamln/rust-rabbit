@@ -1,9 +1,12 @@
 use crate::{
     connection::ConnectionManager,
-    error::{Result, RabbitError},
+    error::{RabbitError, Result},
 };
 use lapin::{
-    options::{ExchangeDeclareOptions as LapinExchangeDeclareOptions, QueueDeclareOptions as LapinQueueDeclareOptions, BasicPublishOptions},
+    options::{
+        BasicPublishOptions, ExchangeDeclareOptions as LapinExchangeDeclareOptions,
+        QueueDeclareOptions as LapinQueueDeclareOptions,
+    },
     types::FieldTable,
     BasicProperties, Channel, ExchangeKind,
 };
@@ -35,11 +38,12 @@ impl Publisher {
         T: Serialize,
     {
         let channel = self.get_channel().await?;
-        
+
         // Declare queue if auto_declare is enabled
         let options = options.unwrap_or_default();
         if options.auto_declare_queue {
-            self.declare_queue(&channel, queue_name, &options.queue_options).await?;
+            self.declare_queue(&channel, queue_name, &options.queue_options)
+                .await?;
         }
 
         let payload = self.serialize_message(message)?;
@@ -71,11 +75,12 @@ impl Publisher {
         T: Serialize,
     {
         let channel = self.get_channel().await?;
-        
+
         // Declare exchange if auto_declare is enabled
         let options = options.unwrap_or_default();
         if options.auto_declare_exchange {
-            self.declare_exchange(&channel, exchange_name, &options.exchange_options).await?;
+            self.declare_exchange(&channel, exchange_name, &options.exchange_options)
+                .await?;
         }
 
         let payload = self.serialize_message(message)?;
@@ -91,8 +96,10 @@ impl Publisher {
             )
             .await?;
 
-        debug!("Published message to exchange: {} with routing key: {}", 
-               exchange_name, routing_key);
+        debug!(
+            "Published message to exchange: {} with routing key: {}",
+            exchange_name, routing_key
+        );
         Ok(())
     }
 
@@ -109,26 +116,27 @@ impl Publisher {
         T: Serialize,
     {
         let channel = self.get_channel().await?;
-        
+
         let options = options.unwrap_or_default();
-        
+
         // Ensure the exchange is declared as delayed type
         if options.auto_declare_exchange {
             let mut exchange_opts = options.exchange_options.clone();
             exchange_opts.exchange_type = ExchangeKind::Custom("x-delayed-message".to_string());
-            
+
             // We'll handle arguments in the declare_exchange method
-            self.declare_exchange(&channel, exchange_name, &exchange_opts).await?;
+            self.declare_exchange(&channel, exchange_name, &exchange_opts)
+                .await?;
         }
 
         let payload = self.serialize_message(message)?;
         let mut properties = self.build_basic_properties(&options)?;
-        
+
         // Add delay header
         let mut headers = properties.headers().clone().unwrap_or_default();
         headers.insert(
             "x-delay".into(),
-            lapin::types::AMQPValue::LongLongInt(delay.as_millis() as i64)
+            lapin::types::AMQPValue::LongLongInt(delay.as_millis() as i64),
         );
         properties = properties.with_headers(headers);
 
@@ -142,8 +150,10 @@ impl Publisher {
             )
             .await?;
 
-        debug!("Published delayed message to exchange: {} with delay: {:?}", 
-               exchange_name, delay);
+        debug!(
+            "Published delayed message to exchange: {} with delay: {:?}",
+            exchange_name, delay
+        );
         Ok(())
     }
 
@@ -161,8 +171,9 @@ impl Publisher {
     {
         let mut options = options.unwrap_or_default();
         options.ttl = Some(ttl);
-        
-        self.publish_to_exchange(exchange_name, routing_key, message, Some(options)).await
+
+        self.publish_to_exchange(exchange_name, routing_key, message, Some(options))
+            .await
     }
 
     /// Get a channel from the connection manager
@@ -255,16 +266,16 @@ impl Publisher {
                     let mut arguments = options.arguments.clone();
                     let original_type_str = match &options.original_type {
                         ExchangeKind::Direct => "direct",
-                        ExchangeKind::Fanout => "fanout", 
+                        ExchangeKind::Fanout => "fanout",
                         ExchangeKind::Topic => "topic",
                         ExchangeKind::Headers => "headers",
                         ExchangeKind::Custom(custom) => custom,
                     };
                     arguments.insert(
                         "x-delayed-type".into(),
-                        lapin::types::AMQPValue::LongString(original_type_str.into())
+                        lapin::types::AMQPValue::LongString(original_type_str.into()),
                     );
-                    
+
                     let exchange_options = LapinExchangeDeclareOptions {
                         passive: options.passive,
                         durable: options.durable,
@@ -281,7 +292,7 @@ impl Publisher {
                             arguments,
                         )
                         .await?;
-                        
+
                     debug!("Declared delayed message exchange: {}", exchange_name);
                     return Ok(());
                 } else {
@@ -308,7 +319,10 @@ impl Publisher {
             )
             .await?;
 
-        debug!("Declared exchange: {} of type: {:?}", exchange_name, options.exchange_type);
+        debug!(
+            "Declared exchange: {} of type: {:?}",
+            exchange_name, options.exchange_type
+        );
         Ok(())
     }
 }
@@ -318,34 +332,34 @@ impl Publisher {
 pub struct PublishOptions {
     /// Whether the message should be persistent
     pub persistent: bool,
-    
+
     /// Message ID
     pub message_id: Option<String>,
-    
+
     /// Correlation ID for request-response patterns
     pub correlation_id: Option<String>,
-    
+
     /// Reply-to queue for RPC patterns
     pub reply_to: Option<String>,
-    
+
     /// Message Time To Live
     pub ttl: Option<Duration>,
-    
+
     /// Message priority (0-255)
     pub priority: Option<u8>,
-    
+
     /// Custom headers
     pub headers: HashMap<String, lapin::types::AMQPValue>,
-    
+
     /// Auto-declare queue before publishing
     pub auto_declare_queue: bool,
-    
+
     /// Auto-declare exchange before publishing
     pub auto_declare_exchange: bool,
-    
+
     /// Queue declaration options
     pub queue_options: CustomQueueDeclareOptions,
-    
+
     /// Exchange declaration options
     pub exchange_options: CustomExchangeDeclareOptions,
 }
@@ -460,15 +474,16 @@ impl PublishOptionsBuilder {
     /// Add a string header
     pub fn header_string<K: Into<String>, V: Into<String>>(mut self, key: K, value: V) -> Self {
         self.headers.insert(
-            key.into(), 
-            lapin::types::AMQPValue::LongString(value.into().into())
+            key.into(),
+            lapin::types::AMQPValue::LongString(value.into().into()),
         );
         self
     }
 
     /// Add an integer header
     pub fn header_int<K: Into<String>>(mut self, key: K, value: i64) -> Self {
-        self.headers.insert(key.into(), lapin::types::AMQPValue::LongLongInt(value));
+        self.headers
+            .insert(key.into(), lapin::types::AMQPValue::LongLongInt(value));
         self
     }
 
@@ -533,6 +548,12 @@ impl PublishOptionsBuilder {
             queue_options: self.queue_options,
             exchange_options: self.exchange_options,
         }
+    }
+}
+
+impl Default for PublishOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

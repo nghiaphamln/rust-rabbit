@@ -361,6 +361,63 @@ match publisher.publish_to_queue("orders", &message, None).await {
 }
 ```
 
+## Testing
+
+RustRabbit includes comprehensive test suites to ensure reliability and performance.
+
+### Unit Tests
+
+Run unit tests with:
+
+```bash
+cargo test --lib
+# or
+make test-unit
+```
+
+### Integration Tests with Real RabbitMQ
+
+RustRabbit supports integration testing with real RabbitMQ instances using Docker:
+
+```bash
+# Start RabbitMQ and run integration tests
+make test-integration
+
+# Or manually:
+docker-compose -f docker-compose.test.yml up -d
+cargo test --test integration_example -- --test-threads=1
+docker-compose -f docker-compose.test.yml down
+```
+
+### Quick Development Setup
+
+```bash
+# Setup development environment
+make setup
+
+# Start RabbitMQ for development
+make docker-up
+
+# Run tests with file watching
+make dev
+
+# Run integration tests with file watching
+make dev-integration
+```
+
+### Test Coverage
+
+The integration tests cover:
+- ✅ End-to-end message publishing and consumption
+- ✅ Retry mechanisms with delayed message exchange
+- ✅ Health monitoring and connection management
+- ✅ Performance benchmarking
+- ✅ Error handling and recovery scenarios
+- ✅ Builder pattern configuration
+- ✅ Concurrent message processing
+
+See [INTEGRATION_TESTING.md](INTEGRATION_TESTING.md) for detailed testing documentation.
+
 ## Requirements
 
 - **RabbitMQ**: Version 3.8 or higher

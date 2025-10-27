@@ -1,41 +1,40 @@
 use crate::{
-    error::{Result, RabbitError},
     connection::ConnectionManager,
+    error::{RabbitError, Result},
 };
 use lapin::{
-    Channel, ExchangeKind,
-    options::{ExchangeDeclareOptions, QueueDeclareOptions, BasicPublishOptions, QueueBindOptions},
+    options::{BasicPublishOptions, ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions},
     types::FieldTable,
-    BasicProperties,
+    BasicProperties, Channel, ExchangeKind,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
 /// Retry policy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetryPolicy {
     /// Maximum number of retry attempts
     pub max_retries: u32,
-    
+
     /// Initial delay between retries
     pub initial_delay: Duration,
-    
+
     /// Maximum delay between retries
     pub max_delay: Duration,
-    
+
     /// Multiplier for exponential backoff
     pub backoff_multiplier: f64,
-    
+
     /// Jitter factor (0.0 to 1.0) to add randomness to delays
     pub jitter: f64,
-    
+
     /// Retry queue naming pattern
     pub retry_queue_pattern: String,
-    
+
     /// Dead letter exchange for failed messages
     pub dead_letter_exchange: Option<String>,
-    
+
     /// Dead letter queue for failed messages
     pub dead_letter_queue: Option<String>,
 }
@@ -59,8 +58,8 @@ impl RetryPolicy {
     /// Calculate delay for a specific retry attempt
     pub fn calculate_delay(&self, attempt: u32) -> Duration {
         let base_delay = Duration::from_millis(
-            (self.initial_delay.as_millis() as f64 * 
-             self.backoff_multiplier.powi(attempt as i32)) as u64
+            (self.initial_delay.as_millis() as f64 * self.backoff_multiplier.powi(attempt as i32))
+                as u64,
         );
 
         let delay = if base_delay > self.max_delay {
@@ -121,7 +120,10 @@ impl DelayedMessageExchange {
             self.setup_dead_letter_infrastructure(&channel, dle).await?;
         }
 
-        info!("Delayed message exchange setup completed: {}", self.exchange_name);
+        info!(
+            "Delayed message exchange setup completed: {}",
+            self.exchange_name
+        );
         Ok(())
     }
 
@@ -156,7 +158,11 @@ impl DelayedMessageExchange {
     }
 
     /// Setup dead letter exchange and queue
-    async fn setup_dead_letter_infrastructure(&self, channel: &Channel, dle_name: &str) -> Result<()> {
+    async fn setup_dead_letter_infrastructure(
+        &self,
+        channel: &Channel,
+        dle_name: &str,
+    ) -> Result<()> {
         // Declare dead letter exchange
         let dle_options = ExchangeDeclareOptions {
             passive: false,
@@ -221,12 +227,14 @@ impl DelayedMessageExchange {
         if retry_count >= self.retry_policy.max_retries {
             // Send to dead letter exchange
             if let Some(ref dle) = self.retry_policy.dead_letter_exchange {
-                return self.send_to_dead_letter(message, dle, original_headers).await;
+                return self
+                    .send_to_dead_letter(message, dle, original_headers)
+                    .await;
             } else {
-                return Err(RabbitError::RetryExhausted(
-                    format!("Max retries ({}) exceeded for queue: {}", 
-                           self.retry_policy.max_retries, original_queue)
-                ));
+                return Err(RabbitError::RetryExhausted(format!(
+                    "Max retries ({}) exceeded for queue: {}",
+                    self.retry_policy.max_retries, original_queue
+                )));
             }
         }
 
@@ -235,8 +243,7 @@ impl DelayedMessageExchange {
         let channel = connection.create_channel().await?;
 
         // Serialize message
-        let payload = serde_json::to_vec(message)
-            .map_err(RabbitError::Serialization)?;
+        let payload = serde_json::to_vec(message).map_err(RabbitError::Serialization)?;
 
         // Build properties with delay header
         let mut properties = BasicProperties::default()
@@ -271,8 +278,12 @@ impl DelayedMessageExchange {
             )
             .await?;
 
-        info!("Published retry message for queue: {} (attempt: {}, delay: {:?})", 
-              original_queue, retry_count + 1, delay);
+        info!(
+            "Published retry message for queue: {} (attempt: {}, delay: {:?})",
+            original_queue,
+            retry_count + 1,
+            delay
+        );
 
         Ok(())
     }
@@ -291,8 +302,7 @@ impl DelayedMessageExchange {
         let channel = connection.create_channel().await?;
 
         // Serialize message
-        let payload = serde_json::to_vec(message)
-            .map_err(RabbitError::Serialization)?;
+        let payload = serde_json::to_vec(message).map_err(RabbitError::Serialization)?;
 
         // Build properties
         let mut properties = BasicProperties::default()
@@ -323,7 +333,10 @@ impl DelayedMessageExchange {
             )
             .await?;
 
-        warn!("Message sent to dead letter exchange: {}", dead_letter_exchange);
+        warn!(
+            "Message sent to dead letter exchange: {}",
+            dead_letter_exchange
+        );
         Ok(())
     }
 
@@ -334,11 +347,13 @@ impl DelayedMessageExchange {
 
         // Setup retry queues for each retry attempt
         for attempt in 1..=self.retry_policy.max_retries {
-            let retry_queue_name = self.retry_policy.get_retry_queue_name(original_queue, attempt);
-            
+            let retry_queue_name = self
+                .retry_policy
+                .get_retry_queue_name(original_queue, attempt);
+
             // Create retry queue arguments
             let mut arguments = FieldTable::default();
-            
+
             // Set message TTL based on retry delay
             let delay = self.retry_policy.calculate_delay(attempt - 1);
             arguments.insert(
@@ -383,7 +398,10 @@ impl DelayedMessageExchange {
                 .queue_declare(&retry_queue_name, queue_options, arguments)
                 .await?;
 
-            debug!("Setup retry queue: {} for attempt: {}", retry_queue_name, attempt);
+            debug!(
+                "Setup retry queue: {} for attempt: {}",
+                retry_queue_name, attempt
+            );
         }
 
         info!("Retry queues setup completed for: {}", original_queue);
@@ -470,12 +488,7 @@ mod tests {
     #[test]
     fn test_retry_message_creation() {
         let original_message = "test message";
-        let retry_msg = RetryMessage::new(
-            original_message,
-            2,
-            "test-queue".to_string(),
-            None,
-        );
+        let retry_msg = RetryMessage::new(original_message, 2, "test-queue".to_string(), None);
 
         assert_eq!(retry_msg.original_message, "test message");
         assert_eq!(retry_msg.retry_count, 2);

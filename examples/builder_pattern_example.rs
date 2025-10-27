@@ -1,12 +1,9 @@
-use rust_rabbit::{
-    RustRabbit, RabbitConfig, PublishOptions, ConsumerOptions,
-    MessageHandler,
-};
+use async_trait::async_trait;
 use rust_rabbit::consumer::{MessageContext, MessageResult};
-use serde::{Serialize, Deserialize};
+use rust_rabbit::{ConsumerOptions, MessageHandler, PublishOptions, RabbitConfig, RustRabbit};
+use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use tracing::info;
-use async_trait::async_trait;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct OrderMessage {
@@ -56,8 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .enabled()
         })
         .pool(|pool| {
-            pool
-                .max_connections(20)
+            pool.max_connections(20)
                 .min_connections(3)
                 .high_throughput()
         })
@@ -150,10 +146,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     publisher
         .publish_to_exchange(
-            "order-exchange", 
-            "new-order", 
-            &order, 
-            Some(advanced_publish_options)
+            "order-exchange",
+            "new-order",
+            &order,
+            Some(advanced_publish_options),
         )
         .await?;
 

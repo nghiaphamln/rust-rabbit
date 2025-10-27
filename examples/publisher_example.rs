@@ -1,8 +1,5 @@
-use rust_rabbit::{
-    RustRabbit, RabbitConfig, PublishOptions, 
-    CustomQueueDeclareOptions,
-};
-use serde::{Serialize, Deserialize};
+use rust_rabbit::{CustomQueueDeclareOptions, PublishOptions, RabbitConfig, RustRabbit};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
 

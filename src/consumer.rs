@@ -1,20 +1,24 @@
 use crate::{
     connection::ConnectionManager,
-    error::{Result, RabbitError},
-    retry::RetryPolicy,
+    error::{RabbitError, Result},
     publisher::CustomQueueDeclareOptions,
+    retry::RetryPolicy,
 };
+use async_trait::async_trait;
+use futures::StreamExt;
 use lapin::{
-    options::{BasicAckOptions, BasicNackOptions, BasicConsumeOptions, QueueDeclareOptions as LapinQueueDeclareOptions},
+    message::Delivery,
+    options::{
+        BasicAckOptions, BasicConsumeOptions, BasicNackOptions,
+        QueueDeclareOptions as LapinQueueDeclareOptions,
+    },
     types::FieldTable,
-    Channel, message::Delivery,
+    Channel,
 };
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
-use tracing::{info, warn, error, debug};
-use async_trait::async_trait;
 use tokio::sync::Semaphore;
-use futures::StreamExt;
+use tracing::{debug, error, info, warn};
 
 /// Message handler trait for processing consumed messages
 #[async_trait]
@@ -59,34 +63,34 @@ pub enum MessageResult {
 pub struct ConsumerOptions {
     /// Queue name to consume from
     pub queue_name: String,
-    
+
     /// Consumer tag (optional)
     pub consumer_tag: Option<String>,
-    
+
     /// Number of concurrent message processors
     pub concurrency: usize,
-    
+
     /// Prefetch count (QoS)
     pub prefetch_count: Option<u16>,
-    
+
     /// Auto-declare queue before consuming
     pub auto_declare_queue: bool,
-    
+
     /// Queue declaration options
     pub queue_options: CustomQueueDeclareOptions,
-    
+
     /// Retry policy for failed messages
     pub retry_policy: Option<RetryPolicy>,
-    
+
     /// Dead letter exchange for failed messages
     pub dead_letter_exchange: Option<String>,
-    
+
     /// Auto-ack messages (not recommended for production)
     pub auto_ack: bool,
-    
+
     /// Consumer exclusive mode
     pub exclusive: bool,
-    
+
     /// Consumer arguments
     pub arguments: FieldTable,
 }
@@ -261,6 +265,7 @@ impl Default for ConsumerOptions {
 
 /// Consumer for receiving messages from RabbitMQ
 pub struct Consumer {
+    #[allow(dead_code)] // Will be used for connection health monitoring
     connection_manager: ConnectionManager,
     options: ConsumerOptions,
     channel: Channel,
@@ -304,7 +309,9 @@ impl Consumer {
         T: DeserializeOwned + Send + Sync + 'static,
         H: MessageHandler<T>,
     {
-        let consumer_tag = self.options.consumer_tag
+        let consumer_tag = self
+            .options
+            .consumer_tag
             .clone()
             .unwrap_or_else(|| format!("rust-rabbit-{}", uuid::Uuid::new_v4()));
 
@@ -325,14 +332,20 @@ impl Consumer {
             )
             .await?;
 
-        info!("Started consuming from queue: {} with tag: {}", 
-              self.options.queue_name, consumer_tag);
+        info!(
+            "Started consuming from queue: {} with tag: {}",
+            self.options.queue_name, consumer_tag
+        );
 
         while let Some(delivery) = consumer.next().await {
             let delivery = delivery?;
-            let permit = self.semaphore.clone().acquire_owned().await
+            let permit = self
+                .semaphore
+                .clone()
+                .acquire_owned()
+                .await
                 .map_err(|e| RabbitError::Generic(e.into()))?;
-            
+
             let handler = handler.clone();
             let retry_policy = self.options.retry_policy.clone();
             let dead_letter_exchange = self.options.dead_letter_exchange.clone();
@@ -341,20 +354,25 @@ impl Consumer {
             // Process message in a separate task
             tokio::spawn(async move {
                 let _permit = permit; // Hold the permit for the duration of processing
-                
+
                 if let Err(e) = Self::process_message::<T, H>(
                     delivery,
                     handler,
                     retry_policy,
                     dead_letter_exchange,
                     channel,
-                ).await {
+                )
+                .await
+                {
                     error!("Error processing message: {}", e);
                 }
             });
         }
 
-        warn!("Consumer stream ended for queue: {}", self.options.queue_name);
+        warn!(
+            "Consumer stream ended for queue: {}",
+            self.options.queue_name
+        );
         Ok(())
     }
 
@@ -371,7 +389,7 @@ impl Consumer {
         H: MessageHandler<T>,
     {
         let context = Self::build_message_context(&delivery);
-        
+
         // Deserialize message
         let message: T = match serde_json::from_slice(&delivery.data) {
             Ok(msg) => msg,
@@ -384,7 +402,7 @@ impl Consumer {
 
         // Handle message
         let result = handler.handle(message, context.clone()).await;
-        
+
         match result {
             MessageResult::Ack => {
                 Self::ack_message(&delivery, &channel).await?;
@@ -415,7 +433,7 @@ impl Consumer {
     /// Build message context from delivery
     fn build_message_context(delivery: &Delivery) -> MessageContext {
         let properties = &delivery.properties;
-        
+
         MessageContext {
             message_id: properties.message_id().as_ref().map(|s| s.to_string()),
             correlation_id: properties.correlation_id().as_ref().map(|s| s.to_string()),
@@ -427,7 +445,10 @@ impl Consumer {
             headers: properties.headers().clone().unwrap_or_default(),
             timestamp: *properties.timestamp(),
             retry_count: Self::get_retry_count_from_headers(
-                properties.headers().as_ref().unwrap_or(&FieldTable::default())
+                properties
+                    .headers()
+                    .as_ref()
+                    .unwrap_or(&FieldTable::default()),
             ),
         }
     }
@@ -475,20 +496,27 @@ impl Consumer {
         retry_policy: &RetryPolicy,
     ) -> Result<()> {
         if context.retry_count >= retry_policy.max_retries {
-            warn!("Max retries exceeded for message: {}", delivery.delivery_tag);
+            warn!(
+                "Max retries exceeded for message: {}",
+                delivery.delivery_tag
+            );
             Self::reject_message(delivery, channel, false).await?;
             return Ok(());
         }
 
         // Calculate delay for next retry
         let delay = retry_policy.calculate_delay(context.retry_count);
-        
+
         // For now, just requeue the message
         // In a production implementation, you would use the delayed message exchange
         // or implement a retry queue pattern
-        info!("Retrying message after {:?} (attempt {})", delay, context.retry_count + 1);
+        info!(
+            "Retrying message after {:?} (attempt {})",
+            delay,
+            context.retry_count + 1
+        );
         Self::reject_message(delivery, channel, true).await?;
-        
+
         Ok(())
     }
 
@@ -501,7 +529,10 @@ impl Consumer {
     ) -> Result<()> {
         // In a real implementation, you would republish the message to the DLE
         // For now, just reject without requeue
-        warn!("Sending message to dead letter exchange: {}", dead_letter_exchange);
+        warn!(
+            "Sending message to dead letter exchange: {}",
+            dead_letter_exchange
+        );
         Self::reject_message(delivery, channel, false).await?;
         Ok(())
     }

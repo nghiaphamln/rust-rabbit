@@ -1,12 +1,9 @@
-use rust_rabbit::{
-    RustRabbit, RabbitConfig, ConsumerOptions, MessageHandler,
-    retry::RetryPolicy,
-};
-use rust_rabbit::consumer::{MessageContext, MessageResult};
-use serde::{Serialize, Deserialize};
-use std::{sync::Arc, time::Duration};
-use tracing::{info, error};
 use async_trait::async_trait;
+use rust_rabbit::consumer::{MessageContext, MessageResult};
+use rust_rabbit::{retry::RetryPolicy, ConsumerOptions, MessageHandler, RabbitConfig, RustRabbit};
+use serde::{Deserialize, Serialize};
+use std::{sync::Arc, time::Duration};
+use tracing::{error, info};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct OrderMessage {
@@ -23,15 +20,20 @@ struct OrderHandler;
 impl MessageHandler<OrderMessage> for OrderHandler {
     async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
         info!("Processing order: {:?}", message);
-        info!("Message context: queue={}, retry_count={}", 
-              context.routing_key, context.retry_count);
+        info!(
+            "Message context: queue={}, retry_count={}",
+            context.routing_key, context.retry_count
+        );
 
         // Simulate processing
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Simulate occasional failures for retry demonstration
         if message.order_id.ends_with("999") && context.retry_count < 2 {
-            error!("Simulated processing failure for order: {}", message.order_id);
+            error!(
+                "Simulated processing failure for order: {}",
+                message.order_id
+            );
             return MessageResult::Retry;
         }
 

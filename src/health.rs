@@ -1,14 +1,14 @@
 use crate::{
-    connection::{ConnectionManager, ConnectionStats},
-    error::{Result, RabbitError},
     config::HealthCheckConfig,
+    connection::{ConnectionManager, ConnectionStats},
+    error::{RabbitError, Result},
 };
-use serde::{Serialize, Deserialize};
-use std::time::{Duration, Instant};
-use tokio::time::{sleep, interval};
-use tracing::{info, warn, error, debug};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::{interval, sleep};
+use tracing::{debug, error, info, warn};
 
 /// Connection status enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ impl HealthChecker {
     /// Create a new health checker
     pub fn new(connection_manager: ConnectionManager) -> Self {
         let config = connection_manager.config.health_check.clone();
-        
+
         Self {
             connection_manager,
             config,
@@ -94,7 +94,10 @@ impl HealthChecker {
             checker.monitoring_loop().await;
         });
 
-        info!("Health monitoring started with interval: {:?}", self.config.check_interval);
+        info!(
+            "Health monitoring started with interval: {:?}",
+            self.config.check_interval
+        );
         Ok(())
     }
 
@@ -122,31 +125,28 @@ impl HealthChecker {
             details.push_str("All connections are down. ");
         } else if connection_stats.unhealthy_connections > 0 {
             // We have some healthy connections but also some unhealthy ones
-            let unhealthy_ratio = connection_stats.unhealthy_connections as f64 / 
-                                 connection_stats.total_connections as f64;
-            
+            let unhealthy_ratio = connection_stats.unhealthy_connections as f64
+                / connection_stats.total_connections as f64;
+
             if unhealthy_ratio > 0.5 {
                 status = ConnectionStatus::Degraded;
                 details.push_str(&format!(
                     "More than 50% of connections are unhealthy ({}/{}). ",
-                    connection_stats.unhealthy_connections,
-                    connection_stats.total_connections
+                    connection_stats.unhealthy_connections, connection_stats.total_connections
                 ));
             } else {
                 status = ConnectionStatus::Healthy;
                 details.push_str(&format!(
                     "Some connections are unhealthy ({}/{}). ",
-                    connection_stats.unhealthy_connections,
-                    connection_stats.total_connections
+                    connection_stats.unhealthy_connections, connection_stats.total_connections
                 ));
             }
         }
 
         // Try to get a connection and perform a basic operation
-        match tokio::time::timeout(
-            self.config.check_timeout,
-            self.test_connection_operation()
-        ).await {
+        match tokio::time::timeout(self.config.check_timeout, self.test_connection_operation())
+            .await
+        {
             Ok(Ok(_)) => {
                 if status == ConnectionStatus::Healthy {
                     details.push_str("Connection test successful. ");
@@ -165,7 +165,7 @@ impl HealthChecker {
         }
 
         let response_time = start_time.elapsed();
-        
+
         // Additional checks based on response time
         if response_time > Duration::from_secs(5) {
             if status == ConnectionStatus::Healthy {
@@ -187,7 +187,10 @@ impl HealthChecker {
         let mut last_result = self.last_result.write().await;
         *last_result = Some(result.clone());
 
-        debug!("Health check completed: {:?} in {:?}", result.status, result.response_time);
+        debug!(
+            "Health check completed: {:?} in {:?}",
+            result.status, result.response_time
+        );
         Ok(result)
     }
 
@@ -236,7 +239,7 @@ impl HealthChecker {
 
             if start.elapsed() > timeout_duration {
                 return Err(RabbitError::HealthCheck(
-                    "Timeout waiting for healthy connection".to_string()
+                    "Timeout waiting for healthy connection".to_string(),
                 ));
             }
 
@@ -250,7 +253,10 @@ impl HealthChecker {
         let connection_stats = self.connection_manager.get_stats().await;
 
         HealthSummary {
-            status: last_result.as_ref().map(|r| r.status).unwrap_or(ConnectionStatus::Down),
+            status: last_result
+                .as_ref()
+                .map(|r| r.status)
+                .unwrap_or(ConnectionStatus::Down),
             last_check: last_result.as_ref().map(|r| r.timestamp),
             total_connections: connection_stats.total_connections,
             healthy_connections: connection_stats.healthy_connections,
@@ -263,7 +269,7 @@ impl HealthChecker {
     /// Internal monitoring loop
     async fn monitoring_loop(&self) {
         let mut interval = interval(self.config.check_interval);
-        
+
         loop {
             // Check if monitoring should continue
             {
@@ -291,7 +297,7 @@ impl HealthChecker {
         // Perform a simple operation to test the connection
         // We'll declare a temporary queue and then delete it
         let test_queue_name = format!("health-check-{}", uuid::Uuid::new_v4());
-        
+
         channel
             .queue_declare(
                 &test_queue_name,
@@ -360,10 +366,10 @@ pub struct HealthMetrics {
 pub trait HealthCheckConfigExt {
     /// Create a conservative health check configuration
     fn conservative() -> HealthCheckConfig;
-    
+
     /// Create an aggressive health check configuration
     fn aggressive() -> HealthCheckConfig;
-    
+
     /// Create a minimal health check configuration
     fn minimal() -> HealthCheckConfig;
 }
@@ -402,13 +408,13 @@ mod tests {
     fn test_connection_status() {
         assert!(ConnectionStatus::Healthy.is_healthy());
         assert!(ConnectionStatus::Healthy.is_operational());
-        
+
         assert!(!ConnectionStatus::Degraded.is_healthy());
         assert!(ConnectionStatus::Degraded.is_operational());
-        
+
         assert!(!ConnectionStatus::Unhealthy.is_healthy());
         assert!(!ConnectionStatus::Unhealthy.is_operational());
-        
+
         assert!(!ConnectionStatus::Down.is_healthy());
         assert!(!ConnectionStatus::Down.is_operational());
     }

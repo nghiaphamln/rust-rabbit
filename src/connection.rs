@@ -1,9 +1,12 @@
-use crate::{config::RabbitConfig, error::{Result, RabbitError}};
-use lapin::{Connection as LapinConnection, ConnectionProperties, Channel};
+use crate::{
+    config::RabbitConfig,
+    error::{RabbitError, Result},
+};
+use lapin::{Channel, Connection as LapinConnection, ConnectionProperties};
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
-use tokio::time::{sleep, Duration, timeout, Instant};
-use tracing::{info, warn, error, debug};
+use tokio::sync::{Mutex, RwLock};
+use tokio::time::{sleep, timeout, Duration, Instant};
+use tracing::{debug, error, info, warn};
 
 /// Connection wrapper with metadata
 #[derive(Debug)]
@@ -51,6 +54,7 @@ impl Connection {
 pub struct ConnectionManager {
     pub config: RabbitConfig,
     connections: Arc<RwLock<Vec<Arc<Connection>>>>,
+    #[allow(dead_code)] // Will be used for connection tracking in future versions
     connection_counter: Arc<Mutex<usize>>,
 }
 
@@ -65,7 +69,7 @@ impl ConnectionManager {
 
         // Initialize minimum connections
         manager.ensure_min_connections().await?;
-        
+
         // Start background health monitoring
         if manager.config.health_check.enabled {
             manager.start_health_monitoring().await;
@@ -77,17 +81,17 @@ impl ConnectionManager {
     /// Get a connection from the pool
     pub async fn get_connection(&self) -> Result<Arc<Connection>> {
         let connections = self.connections.read().await;
-        
+
         // Find a healthy connection
         for conn in connections.iter() {
             if conn.is_connected() {
                 return Ok(conn.clone());
             }
         }
-        
+
         // No healthy connections found, drop the read lock and create new one
         drop(connections);
-        
+
         self.create_new_connection().await
     }
 
@@ -100,28 +104,34 @@ impl ConnectionManager {
             match self.establish_connection().await {
                 Ok(connection) => {
                     let conn = Arc::new(Connection::new(connection));
-                    
+
                     // Add to pool if not at max capacity
                     let mut connections = self.connections.write().await;
                     if connections.len() < self.config.pool_config.max_connections {
                         connections.push(conn.clone());
                     }
-                    
+
                     info!("Successfully established new RabbitMQ connection");
                     return Ok(conn);
                 }
                 Err(e) => {
                     retry_count += 1;
                     if retry_count > self.config.retry_config.max_retries {
-                        error!("Failed to establish connection after {} retries: {}", retry_count, e);
-                        return Err(RabbitError::RetryExhausted(
-                            format!("Connection failed after {} retries", retry_count)
-                        ));
+                        error!(
+                            "Failed to establish connection after {} retries: {}",
+                            retry_count, e
+                        );
+                        return Err(RabbitError::RetryExhausted(format!(
+                            "Connection failed after {} retries",
+                            retry_count
+                        )));
                     }
 
-                    warn!("Connection attempt {} failed: {}. Retrying in {:?}", 
-                          retry_count, e, delay);
-                    
+                    warn!(
+                        "Connection attempt {} failed: {}. Retrying in {:?}",
+                        retry_count, e, delay
+                    );
+
                     sleep(delay).await;
                     delay = self.calculate_next_delay(delay);
                 }
@@ -132,8 +142,8 @@ impl ConnectionManager {
     /// Establish a raw connection to RabbitMQ
     async fn establish_connection(&self) -> Result<LapinConnection> {
         let connection_future = LapinConnection::connect(
-            &self.config.connection_string, 
-            ConnectionProperties::default()
+            &self.config.connection_string,
+            ConnectionProperties::default(),
         );
 
         if let Some(timeout_duration) = self.config.connection_timeout {
@@ -149,11 +159,15 @@ impl ConnectionManager {
     /// Calculate the next retry delay with exponential backoff and jitter
     fn calculate_next_delay(&self, current_delay: Duration) -> Duration {
         let base_delay = Duration::from_millis(
-            (current_delay.as_millis() as f64 * self.config.retry_config.backoff_multiplier) as u64
+            (current_delay.as_millis() as f64 * self.config.retry_config.backoff_multiplier) as u64,
         );
 
         let max_delay = self.config.retry_config.max_delay;
-        let delay = if base_delay > max_delay { max_delay } else { base_delay };
+        let delay = if base_delay > max_delay {
+            max_delay
+        } else {
+            base_delay
+        };
 
         // Add jitter
         if self.config.retry_config.jitter > 0.0 {
@@ -169,22 +183,25 @@ impl ConnectionManager {
     async fn ensure_min_connections(&self) -> Result<()> {
         let connections = self.connections.read().await;
         let healthy_count = connections.iter().filter(|c| c.is_connected()).count();
-        
+
         if healthy_count >= self.config.pool_config.min_connections {
             return Ok(());
         }
-        
+
         drop(connections);
-        
+
         let needed = self.config.pool_config.min_connections - healthy_count;
-        debug!("Creating {} connections to meet minimum requirement", needed);
-        
+        debug!(
+            "Creating {} connections to meet minimum requirement",
+            needed
+        );
+
         for _ in 0..needed {
             if let Err(e) = self.create_new_connection().await {
                 warn!("Failed to create minimum connection: {}", e);
             }
         }
-        
+
         Ok(())
     }
 
@@ -193,7 +210,7 @@ impl ConnectionManager {
         let manager = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(manager.config.health_check.check_interval);
-            
+
             loop {
                 interval.tick().await;
                 manager.perform_health_check().await;
@@ -226,7 +243,10 @@ impl ConnectionManager {
 
         // Ensure we have minimum connections
         if let Err(e) = self.ensure_min_connections().await {
-            warn!("Failed to ensure minimum connections during health check: {}", e);
+            warn!(
+                "Failed to ensure minimum connections during health check: {}",
+                e
+            );
         }
     }
 
@@ -235,7 +255,7 @@ impl ConnectionManager {
         let connections = self.connections.read().await;
         let total = connections.len();
         let healthy = connections.iter().filter(|c| c.is_connected()).count();
-        
+
         ConnectionStats {
             total_connections: total,
             healthy_connections: healthy,
@@ -246,13 +266,13 @@ impl ConnectionManager {
     /// Close all connections
     pub async fn close(&self) -> Result<()> {
         let mut connections = self.connections.write().await;
-        
+
         for conn in connections.drain(..) {
             if let Err(e) = conn.inner().close(0, "Shutdown").await {
                 warn!("Error closing connection: {}", e);
             }
         }
-        
+
         info!("All connections closed");
         Ok(())
     }

@@ -1,23 +1,24 @@
-pub mod connection;
-pub mod publisher;
-pub mod consumer;
 pub mod config;
+pub mod connection;
+pub mod consumer;
 pub mod error;
-pub mod retry;
 pub mod health;
+pub mod publisher;
+pub mod retry;
 
-pub use connection::{Connection, ConnectionManager};
-pub use publisher::{Publisher, PublishOptions, PublishOptionsBuilder, CustomQueueDeclareOptions, CustomExchangeDeclareOptions};
-pub use consumer::{Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler};
 pub use config::{
-    RabbitConfig, RabbitConfigBuilder,
-    RetryConfig, RetryConfigBuilder,
-    HealthCheckConfig, HealthCheckConfigBuilder,
-    PoolConfig, PoolConfigBuilder,
+    HealthCheckConfig, HealthCheckConfigBuilder, PoolConfig, PoolConfigBuilder, RabbitConfig,
+    RabbitConfigBuilder, RetryConfig, RetryConfigBuilder,
 };
+pub use connection::{Connection, ConnectionManager};
+pub use consumer::{Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler};
 pub use error::{RabbitError, Result};
-pub use retry::{RetryPolicy, DelayedMessageExchange};
-pub use health::{HealthChecker, ConnectionStatus};
+pub use health::{ConnectionStatus, HealthChecker};
+pub use publisher::{
+    CustomExchangeDeclareOptions, CustomQueueDeclareOptions, PublishOptions, PublishOptionsBuilder,
+    Publisher,
+};
+pub use retry::{DelayedMessageExchange, RetryPolicy};
 
 /// Main facade for the rust-rabbit library
 pub struct RustRabbit {
