@@ -1,4 +1,9 @@
-use crate::{connection::Connection, error::RustRabbitError, retry::RetryConfig};
+use crate::{
+    connection::Connection, 
+    error::RustRabbitError, 
+    message::{ErrorType, MessageEnvelope},
+    retry::RetryConfig
+};
 use futures_lite::stream::StreamExt;
 use lapin::{
     options::{BasicAckOptions, BasicConsumeOptions, QueueDeclareOptions},
@@ -9,7 +14,7 @@ use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 /// Message wrapper with retry tracking
 #[derive(Debug)]
@@ -166,14 +171,14 @@ impl Consumer {
             )
             .await?;
 
-        // Setup queue and exchange
+        // Setup infrastructure (queues, exchanges)
         self.setup_infrastructure(&channel).await?;
 
-        // Create consumer
+        // Start consuming
         let mut consumer = channel
             .basic_consume(
                 &self.queue_name,
-                "rust-rabbit-consumer",
+                "",
                 BasicConsumeOptions::default(),
                 FieldTable::default(),
             )
@@ -250,6 +255,8 @@ impl Consumer {
         Ok(())
     }
 
+
+
     /// Setup queue and exchange infrastructure
     async fn setup_infrastructure(&self, channel: &Channel) -> Result<(), RustRabbitError> {
         // Declare queue
@@ -278,5 +285,269 @@ impl Consumer {
         }
 
         Ok(())
+    }
+
+    /// Start consuming message envelopes with full retry support
+    pub async fn consume_envelopes<T, H, Fut>(&self, handler: H) -> Result<(), RustRabbitError>
+    where
+        T: DeserializeOwned + Send + Clone + Sync + 'static + serde::Serialize,
+        H: Fn(MessageEnvelope<T>) -> Fut + Send + Sync + Clone + 'static,
+        Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
+    {
+        let channel = self.connection.create_channel().await?;
+        let retry_config = self.retry_config.clone();
+
+        // Set prefetch count
+        channel
+            .basic_qos(
+                self.prefetch_count,
+                lapin::options::BasicQosOptions::default(),
+            )
+            .await?;
+
+        // Setup queue and exchange
+        self.setup_infrastructure(&channel).await?;
+
+        // Create consumer
+        let mut consumer = channel
+            .basic_consume(
+                &self.queue_name,
+                "rust-rabbit-envelope-consumer",
+                BasicConsumeOptions::default(),
+                FieldTable::default(),
+            )
+            .await?;
+
+        let semaphore = Arc::new(Semaphore::new(self.prefetch_count as usize));
+
+        debug!("Started consuming envelopes from queue: {}", self.queue_name);
+
+        // Process message envelopes with retry support
+        while let Some(delivery_result) = consumer.next().await {
+            let delivery = delivery_result?;
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let handler_clone = handler.clone();
+            let auto_ack = self.auto_ack;
+            let channel_clone = Arc::new(channel.clone());
+            let retry_config_clone = retry_config.clone();
+            let queue_name = self.queue_name.clone();
+            let connection = self.connection.clone();
+
+            tokio::spawn(async move {
+                let _permit = permit;
+
+                // Try to deserialize as MessageEnvelope
+                match serde_json::from_slice::<MessageEnvelope<T>>(&delivery.data) {
+                    Ok(mut envelope) => {
+                        debug!(
+                            "Processing envelope {} (attempt {}/{})",
+                            envelope.metadata.message_id,
+                            envelope.metadata.retry_attempt + 1,
+                            envelope.metadata.max_retries + 1
+                        );
+
+                        // Process message
+                        match handler_clone(envelope.clone()).await {
+                            Ok(()) => {
+                                if auto_ack {
+                                    if let Err(e) = channel_clone
+                                        .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+                                        .await
+                                    {
+                                        error!("Failed to ack message: {}", e);
+                                    }
+                                }
+                                debug!("Envelope {} processed successfully", envelope.metadata.message_id);
+                            }
+                            Err(e) => {
+                                error!("Handler error for envelope {}: {}", envelope.metadata.message_id, e);
+                                
+                                // Determine error type (simplified classification)
+                                let error_type = classify_error(e.as_ref());
+                                
+                                // Add error to envelope
+                                envelope = envelope.with_error(
+                                    &e.to_string(),
+                                    error_type,
+                                    Some(&format!("Queue: {}", queue_name))
+                                );
+
+                                if auto_ack {
+                                    // Check if we should retry
+                                    if let Some(retry_cfg) = &retry_config_clone {
+                                        if !envelope.is_retry_exhausted() {
+                                            // Calculate delay and schedule retry
+                                            if let Some(_delay) = retry_cfg.calculate_delay(envelope.metadata.retry_attempt - 1) {
+                                                warn!(
+                                                    "Scheduling retry {} for envelope {} (simple requeue for now)",
+                                                    envelope.metadata.retry_attempt,
+                                                    envelope.metadata.message_id,
+                                                );
+                                                
+                                                // TODO: Implement proper delay-based retry scheduling
+                                                // For now, just nack and requeue
+                                                if let Err(e) = channel_clone
+                                                    .basic_nack(
+                                                        delivery.delivery_tag,
+                                                        lapin::options::BasicNackOptions {
+                                                            multiple: false,
+                                                            requeue: true, // Simple requeue for now
+                                                        },
+                                                    )
+                                                    .await
+                                                {
+                                                    error!("Failed to nack message for retry: {}", e);
+                                                }
+                                            } else {
+                                                // No more retries, send to DLQ
+                                                Self::send_to_dlq(&envelope, retry_cfg, &connection, &queue_name).await;
+                                                
+                                                // ACK original message
+                                                if let Err(e) = channel_clone
+                                                    .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+                                                    .await
+                                                {
+                                                    error!("Failed to ack message after DLQ: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            // Retry exhausted, send to DLQ
+                                            warn!("Retry exhausted for envelope {}", envelope.metadata.message_id);
+                                            Self::send_to_dlq(&envelope, retry_cfg, &connection, &queue_name).await;
+                                            
+                                            // ACK original message
+                                            if let Err(e) = channel_clone
+                                                .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+                                                .await
+                                            {
+                                                error!("Failed to ack message after DLQ: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        // No retry config, just nack
+                                        if let Err(e) = channel_clone
+                                            .basic_nack(
+                                                delivery.delivery_tag,
+                                                lapin::options::BasicNackOptions {
+                                                    multiple: false,
+                                                    requeue: false,
+                                                },
+                                            )
+                                            .await
+                                        {
+                                            error!("Failed to nack message: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to deserialize message envelope: {}", e);
+                        if auto_ack {
+                            // Reject malformed messages
+                            if let Err(e) = channel_clone
+                                .basic_nack(
+                                    delivery.delivery_tag,
+                                    lapin::options::BasicNackOptions {
+                                        multiple: false,
+                                        requeue: false,
+                                    },
+                                )
+                                .await
+                            {
+                                error!("Failed to nack malformed envelope: {}", e);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Send failed message to Dead Letter Queue
+    async fn send_to_dlq<T>(
+        envelope: &MessageEnvelope<T>, 
+        retry_config: &RetryConfig,
+        connection: &Arc<Connection>,
+        queue_name: &str,
+    ) where
+        T: serde::Serialize,
+    {
+        match connection.create_channel().await {
+            Ok(dlq_channel) => {
+                let dlq_name = retry_config.get_dead_letter_queue(queue_name);
+                
+                // Declare DLQ
+                if let Err(e) = dlq_channel
+                    .queue_declare(
+                        &dlq_name,
+                        QueueDeclareOptions {
+                            durable: true,
+                            ..Default::default()
+                        },
+                        FieldTable::default(),
+                    )
+                    .await
+                {
+                    error!("Failed to declare DLQ {}: {}", dlq_name, e);
+                    return;
+                }
+
+                // Publish to DLQ with failure summary
+                let failure_summary = envelope.get_failure_summary();
+                let dlq_payload = serde_json::json!({
+                    "envelope": envelope,
+                    "failure_summary": failure_summary,
+                    "sent_to_dlq_at": chrono::Utc::now(),
+                });
+
+                if let Ok(payload_bytes) = serde_json::to_vec(&dlq_payload) {
+                    if let Err(e) = dlq_channel
+                        .basic_publish(
+                            "",
+                            &dlq_name,
+                            lapin::options::BasicPublishOptions::default(),
+                            &payload_bytes,
+                            lapin::BasicProperties::default(),
+                        )
+                        .await
+                    {
+                        error!("Failed to publish to DLQ {}: {}", dlq_name, e);
+                    } else {
+                        warn!("Sent envelope {} to DLQ: {}", envelope.metadata.message_id, failure_summary);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to create DLQ channel: {}", e);
+            }
+        }
+    }
+}
+
+/// Classify error type based on error message (simplified heuristics)
+fn classify_error(error: &(dyn std::error::Error + Send + Sync)) -> ErrorType {
+    let error_msg = error.to_string().to_lowercase();
+    
+    if error_msg.contains("timeout") 
+        || error_msg.contains("connection") 
+        || error_msg.contains("network") 
+        || error_msg.contains("temporary") {
+        ErrorType::Transient
+    } else if error_msg.contains("rate limit") 
+        || error_msg.contains("quota") 
+        || error_msg.contains("resource") {
+        ErrorType::Resource
+    } else if error_msg.contains("validation") 
+        || error_msg.contains("authentication") 
+        || error_msg.contains("authorization") 
+        || error_msg.contains("invalid") 
+        || error_msg.contains("bad request") {
+        ErrorType::Permanent
+    } else {
+        ErrorType::Unknown
     }
 }

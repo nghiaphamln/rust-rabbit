@@ -99,11 +99,62 @@
 //! // No retries
 //! let no_retry = RetryConfig::no_retry();
 //! ```
+//!
+//! ## MessageEnvelope System
+//!
+//! For advanced retry tracking and error handling, use the MessageEnvelope system:
+//!
+//! ```rust,no_run
+//! use rust_rabbit::{Connection, Publisher, Consumer, MessageEnvelope, RetryConfig};
+//! use serde::{Serialize, Deserialize};
+//!
+//! #[derive(Serialize, Deserialize, Clone)]
+//! struct Order {
+//!     id: u32,
+//!     amount: f64,
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let connection = Connection::new("amqp://localhost:5672").await?;
+//!     
+//!     // Publisher with envelope
+//!     let publisher = Publisher::new(connection.clone());
+//!     let order = Order { id: 123, amount: 99.99 };
+//!     let envelope = MessageEnvelope::new(order, "order_queue")
+//!         .with_max_retries(3);
+//!     
+//!     publisher.publish_envelope_to_queue("order_queue", &envelope).await?;
+//!     
+//!     // Consumer with envelope processing
+//!     let consumer = Consumer::builder(connection, "order_queue")
+//!         .with_retry(RetryConfig::exponential_default())
+//!         .build()
+//!         .await?;
+//!     
+//!     consumer.consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
+//!         println!("Processing order {} (attempt {})", 
+//!                  envelope.payload.id, 
+//!                  envelope.metadata.retry_attempt + 1);
+//!         
+//!         // Access retry metadata
+//!         if !envelope.is_first_attempt() {
+//!             println!("This is a retry. Last error: {:?}", envelope.last_error());
+//!         }
+//!         
+//!         // Your business logic here
+//!         Ok(())
+//!     }).await?;
+//!     
+//!     Ok(())
+//! }
+//! ```
 
 // Re-export main types for easy access
-pub use connection::{Connection, ConnectionBuilder, ConnectionConfig};
+pub use connection::Connection;
 pub use consumer::{Consumer, ConsumerBuilder, Message};
 pub use error::{Result, RustRabbitError};
+pub use message::{ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource};
 pub use publisher::{PublishOptions, Publisher};
 pub use retry::{RetryConfig, RetryMechanism};
 
@@ -111,14 +162,16 @@ pub use retry::{RetryConfig, RetryMechanism};
 mod connection;
 mod consumer;
 mod error;
+mod message;
 mod publisher;
 mod retry;
 
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        Connection, Consumer, ConsumerBuilder, Message, PublishOptions, Publisher, Result,
-        RetryConfig, RetryMechanism, RustRabbitError,
+        Connection, Consumer, ConsumerBuilder, ErrorRecord, ErrorType, Message, MessageEnvelope,
+        MessageMetadata, MessageSource, PublishOptions, Publisher, Result, RetryConfig,
+        RetryMechanism, RustRabbitError,
     };
 }
 

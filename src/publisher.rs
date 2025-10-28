@@ -1,4 +1,4 @@
-use crate::{connection::Connection, error::RustRabbitError};
+use crate::{connection::Connection, error::RustRabbitError, message::MessageEnvelope};
 use lapin::{
     options::{BasicPublishOptions, ExchangeDeclareOptions, QueueDeclareOptions},
     types::FieldTable,
@@ -161,5 +161,76 @@ impl Publisher {
         );
 
         Ok(())
+    }
+
+    /// Publish a message envelope to an exchange (includes retry metadata)
+    pub async fn publish_envelope_to_exchange<T>(
+        &self,
+        exchange: &str,
+        routing_key: &str,
+        envelope: &MessageEnvelope<T>,
+        options: Option<PublishOptions>,
+    ) -> Result<(), RustRabbitError>
+    where
+        T: Serialize,
+    {
+        self.publish_to_exchange(exchange, routing_key, envelope, options)
+            .await
+    }
+
+    /// Publish a message envelope directly to a queue (includes retry metadata)
+    pub async fn publish_envelope_to_queue<T>(
+        &self,
+        queue: &str,
+        envelope: &MessageEnvelope<T>,
+        options: Option<PublishOptions>,
+    ) -> Result<(), RustRabbitError>
+    where
+        T: Serialize,
+    {
+        self.publish_to_queue(queue, envelope, options).await
+    }
+
+    /// Create a message envelope with source tracking and publish to exchange
+    pub async fn publish_with_envelope<T>(
+        &self,
+        exchange: &str,
+        routing_key: &str,
+        payload: &T,
+        source_queue: &str,
+        max_retries: u32,
+        options: Option<PublishOptions>,
+    ) -> Result<(), RustRabbitError>
+    where
+        T: Serialize + Clone,
+    {
+        let envelope = MessageEnvelope::with_source(
+            payload.clone(),
+            source_queue,
+            Some(exchange),
+            Some(routing_key),
+            Some("rust-rabbit-publisher"), // Publisher identifier
+        )
+        .with_max_retries(max_retries);
+
+        self.publish_envelope_to_exchange(exchange, routing_key, &envelope, options)
+            .await
+    }
+
+    /// Create a message envelope and publish directly to queue
+    pub async fn publish_with_envelope_to_queue<T>(
+        &self,
+        queue: &str,
+        payload: &T,
+        max_retries: u32,
+        options: Option<PublishOptions>,
+    ) -> Result<(), RustRabbitError>
+    where
+        T: Serialize + Clone,
+    {
+        let envelope = MessageEnvelope::new(payload.clone(), queue).with_max_retries(max_retries);
+
+        self.publish_envelope_to_queue(queue, &envelope, options)
+            .await
     }
 }

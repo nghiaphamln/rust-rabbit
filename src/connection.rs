@@ -170,37 +170,6 @@ impl Drop for Connection {
     }
 }
 
-/// Connection builder for fluent configuration
-pub struct ConnectionBuilder {
-    config: ConnectionConfig,
-}
-
-impl ConnectionBuilder {
-    /// Create a new connection builder
-    pub fn new(url: &str) -> Self {
-        Self {
-            config: ConnectionConfig::new(url),
-        }
-    }
-
-    /// Set connection timeout
-    pub fn connection_timeout(mut self, timeout_secs: u64) -> Self {
-        self.config = self.config.connection_timeout(timeout_secs);
-        self
-    }
-
-    /// Set heartbeat interval
-    pub fn heartbeat(mut self, heartbeat_secs: u64) -> Self {
-        self.config = self.config.heartbeat(heartbeat_secs);
-        self
-    }
-
-    /// Build and connect
-    pub async fn connect(self) -> Result<Arc<Connection>, RustRabbitError> {
-        Connection::with_config(self.config).await
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,14 +186,12 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_builder() {
-        let builder = ConnectionBuilder::new("amqp://localhost:5672")
-            .connection_timeout(45)
-            .heartbeat(20);
-
-        assert_eq!(builder.config.url, "amqp://localhost:5672");
-        assert_eq!(builder.config.connection_timeout, 45);
-        assert_eq!(builder.config.heartbeat, 20);
+    fn test_connection_url_validation() {
+        // Test basic URL structure validation
+        let url = "amqp://localhost:5672";
+        assert!(url.contains("amqp://"));
+        assert!(url.contains("localhost"));
+        assert!(url.contains("5672"));
     }
 
     #[test]

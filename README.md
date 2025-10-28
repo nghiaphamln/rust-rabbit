@@ -133,21 +133,69 @@ let no_retry = RetryConfig::no_retry();
 // 3. If max retries exceeded, sent to dead letter queue (e.g., orders.dlq)
 ```
 
-## ⚙️ **Advanced Configuration**
+## ⚙️ **Advanced Features**
+
+### MessageEnvelope System
+
+For advanced retry tracking and error handling, use the MessageEnvelope system:
+
+```rust
+use rust_rabbit::{Connection, Publisher, Consumer, MessageEnvelope, RetryConfig};
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Order {
+    id: u32,
+    amount: f64,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::new("amqp://localhost:5672").await?;
+    
+    // Publisher with envelope
+    let publisher = Publisher::new(connection.clone());
+    let order = Order { id: 123, amount: 99.99 };
+    let envelope = MessageEnvelope::new(order, "order_queue")
+        .with_max_retries(3);
+    
+    publisher.publish_envelope_to_queue("order_queue", &envelope).await?;
+    
+    // Consumer with envelope processing
+    let consumer = Consumer::builder(connection, "order_queue")
+        .with_retry(RetryConfig::exponential_default())
+        .build()
+        .await?;
+    
+    consumer.consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
+        println!("Processing order {} (attempt {})", 
+                 envelope.payload.id, 
+                 envelope.metadata.retry_attempt + 1);
+        
+        // Access retry metadata
+        if !envelope.is_first_attempt() {
+            println!("This is a retry. Last error: {:?}", envelope.last_error());
+        }
+        
+        Ok(())
+    }).await?;
+    
+    Ok(())
+}
+```
 
 ### Connection Options
 
 ```rust
-use rust_rabbit::{Connection, ConnectionBuilder};
+use rust_rabbit::Connection;
 
 // Simple connection
 let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
-// With custom settings
-let connection = ConnectionBuilder::new("amqp://user:pass@localhost:5672/vhost")
-    .connection_timeout(60)  // 60 seconds
-    .heartbeat(30)          // 30 seconds  
-    .connect()
+// Different connection URLs
+let local = Connection::new("amqp://localhost:5672").await?;
+let remote = Connection::new("amqp://user:pass@remote-host:5672/vhost").await?;
+let secure = Connection::new("amqps://user:pass@secure-host:5671").await?;
     .await?;
 ```
 
