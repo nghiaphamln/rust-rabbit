@@ -1,302 +1,219 @@
-//! # RustRabbit 🐰
+//! # rust-rabbit 🐰
 //!
-//! A **high-performance, production-ready** RabbitMQ client library for Rust with **zero-configuration**
-//! simplicity and enterprise-grade features. Built for reliability, observability, and developer happiness.
+//! A **simple, reliable** RabbitMQ client library for Rust.
+//! Focus on core functionality with minimal configuration.
 //!
 //! ## Features
 //!
-//! - **🚀 Smart Automation**: One-line setup with `RetryPolicy::fast()` configures everything
-//! - **🔄 Advanced Retry System**: Multiple presets, exponential backoff, dead letter integration  
-//! - **🏗️ Enterprise Patterns**: Request-Response, Saga, Event Sourcing, Priority Queues
-//! - **🔍 Production Observability**: Prometheus metrics, health monitoring, circuit breaker
-//! - **🛡️ Reliability**: Connection pooling, graceful shutdown, error recovery
+//! - **🚀 Simple API**: Just Publisher and Consumer with essential methods
+//! - **🔄 Flexible Retry**: Exponential, linear, or custom retry mechanisms  
+//! - **🛠️ Auto-Setup**: Automatic queue/exchange declaration and binding
+//! - **⚡ Built-in Reliability**: Default ACK behavior with error handling
 //!
 //! ## Quick Start
 //!
+//! ### Publisher
+//!
 //! ```rust,no_run
-//! use rust_rabbit::{
-//!     config::RabbitConfig,
-//!     connection::ConnectionManager,
-//!     consumer::{Consumer, ConsumerOptions},
-//!     retry::RetryPolicy,
-//! };
+//! use rust_rabbit::{Connection, Publisher, PublishOptions};
+//! use serde::Serialize;
+//!
+//! #[derive(Serialize)]
+//! struct Order {
+//!     id: u32,
+//!     amount: f64,
+//! }
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // 1. Connection
-//!     let config = RabbitConfig::builder()
-//!         .connection_string("amqp://user:pass@localhost:5672/vhost")
-//!         .build();
-//!     let connection = ConnectionManager::new(config).await?;
-//!
-//!     // 2. Consumer with retry (1 line!)
-//!     let options = ConsumerOptions {
-//!         auto_ack: false,
-//!         retry_policy: Some(RetryPolicy::fast()),
-//!         ..Default::default()
-//!     };
-//!
-//!     // 3. Create consumer (ready to use)
-//!     let _consumer = Consumer::new(connection, options).await?;
+//!     let connection = Connection::new("amqp://localhost:5672").await?;
+//!     let publisher = Publisher::new(connection);
 //!     
-//!     // Consumer is ready! See examples/ for usage patterns
+//!     let order = Order { id: 123, amount: 99.99 };
+//!     
+//!     // Publish to exchange
+//!     publisher.publish_to_exchange("orders", "new.order", &order, None).await?;
+//!     
+//!     // Publish directly to queue
+//!     publisher.publish_to_queue("order_queue", &order, None).await?;
+//!     
 //!     Ok(())
 //! }
 //! ```
 //!
-//! **What `RetryPolicy::fast()` creates automatically:**
-//! - ✅ **5 retries**: 200ms → 300ms → 450ms → 675ms → 1s (capped at 10s)
-//! - ✅ **Dead Letter Queue**: Automatic DLX/DLQ setup for failed messages
-//! - ✅ **Backoff + Jitter**: Intelligent delay with randomization
-//! - ✅ **Production Ready**: Optimal settings for most use cases
-//!
-//! ## Retry Patterns
+//! ### Consumer with Retry
 //!
 //! ```rust,no_run
-//! use rust_rabbit::retry::RetryPolicy;
+//! use rust_rabbit::{Connection, Consumer, RetryConfig};
+//! use serde::Deserialize;
+//!
+//! #[derive(Deserialize)]
+//! struct Order {
+//!     id: u32,
+//!     amount: f64,
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let connection = Connection::new("amqp://localhost:5672").await?;
+//!     
+//!     let consumer = Consumer::builder(connection, "order_queue")
+//!         .retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
+//!         .bind_to_exchange("orders")
+//!         .concurrency(5)
+//!         .build()
+//!         .await?;
+//!     
+//!     consumer.consume(|order: Order| async move {
+//!         println!("Processing order {}: ${}", order.id, order.amount);
+//!         // Your business logic here
+//!         Ok(()) // ACK message
+//!     }).await?;
+//!     
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Retry Configurations
+//!
+//! ```rust,no_run
+//! use rust_rabbit::RetryConfig;
 //! use std::time::Duration;
 //!
-//! // Quick presets for common scenarios
-//! let fast = RetryPolicy::fast();               // 5 retries, 200ms→10s, 1.5x backoff
-//! let slow = RetryPolicy::slow();               // 3 retries, 1s→1min, 2.0x backoff
-//! let linear = RetryPolicy::linear(Duration::from_millis(500), 3); // Fixed 500ms intervals
+//! // Exponential: 1s -> 2s -> 4s -> 8s -> 16s (5 retries)
+//! let exponential = RetryConfig::exponential_default();
 //!
-//! // Custom with builder
-//! let custom = RetryPolicy::builder()
-//!     .max_retries(5)
-//!     .initial_delay(Duration::from_millis(100))
-//!     .backoff_multiplier(2.0)
-//!     .jitter(0.1)
-//!     .dead_letter_exchange("my.dlx")
-//!     .build();
-//! ```
+//! // Custom exponential: 2s -> 4s -> 8s -> 16s -> 32s (with cap at 60s)
+//! let custom_exp = RetryConfig::exponential(5, Duration::from_secs(2), Duration::from_secs(60));
 //!
-//! ## Advanced Patterns
+//! // Linear: 10s -> 10s -> 10s (3 retries)  
+//! let linear = RetryConfig::linear(3, Duration::from_secs(10));
 //!
-//! ### Request-Response (RPC)
+//! // Custom delays: 1s -> 5s -> 30s
+//! let custom = RetryConfig::custom(vec![
+//!     Duration::from_secs(1),
+//!     Duration::from_secs(5),
+//!     Duration::from_secs(30),
+//! ]);
 //!
-//! ```rust,no_run
-//! use rust_rabbit::patterns::request_response::*;
-//! use std::time::Duration;
-//! use std::sync::Arc;
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Simple example - actual usage requires proper message types
-//!     let client = RequestResponseClient::new(Duration::from_secs(30));
-//!     
-//!     // In real usage, you would send actual request messages
-//!     // let response = client.send_request("queue", request_data, None).await?;
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ### Event Sourcing (CQRS)
-//!
-//! ```rust,no_run
-//! use rust_rabbit::patterns::event_sourcing::*;
-//! use std::sync::Arc;
-//!
-//! async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//!     let event_store = Arc::new(InMemoryEventStore::new());
-//!     
-//!     // Example - actual usage requires implementing AggregateRoot trait
-//!     // let repository = EventSourcingRepository::<MyAggregate>::new(event_store);
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ## Production Features
-//!
-//! ### Health Monitoring
-//!
-//! ```rust,no_run
-//! use rust_rabbit::{health::HealthChecker, connection::ConnectionManager, config::RabbitConfig};
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let config = RabbitConfig::builder()
-//!         .connection_string("amqp://localhost:5672")
-//!         .build();
-//!     let connection_manager = ConnectionManager::new(config).await?;
-//!     let health_checker = HealthChecker::new(connection_manager.clone());
-//!     
-//!     match health_checker.check_health().await {
-//!         Ok(status) => println!("Connection healthy: {:?}", status),
-//!         Err(e) => println!("Connection issues: {}", e),
-//!     }
-//!     Ok(())
-//! }
-//! ```
-//!
-//! ### Prometheus Metrics
-//!
-//! ```rust,no_run
-//! use rust_rabbit::metrics::RustRabbitMetrics;
-//!
-//! let metrics = RustRabbitMetrics::new();
-//! // Metrics automatically collected:
-//! // - rust_rabbit_messages_published_total
-//! // - rust_rabbit_messages_consumed_total  
-//! // - rust_rabbit_message_processing_duration_seconds
-//! // - rust_rabbit_connection_health
+//! // No retries
+//! let no_retry = RetryConfig::no_retry();
 //! ```
 
-pub mod batching;
-pub mod circuit_breaker;
-pub mod config;
-pub mod connection;
-pub mod consumer;
-pub mod error;
-pub mod health;
-pub mod metrics;
-pub mod patterns; // Phase 2: Advanced messaging patterns
-pub mod publisher;
-pub mod retry;
-pub mod shutdown;
+// Re-export main types for easy access
+pub use connection::{Connection, ConnectionBuilder, ConnectionConfig};
+pub use consumer::{Consumer, ConsumerBuilder, Message};
+pub use error::{Result, RustRabbitError};
+pub use publisher::{PublishOptions, Publisher};
+pub use retry::{RetryConfig, RetryMechanism};
 
-pub use batching::{BatchConfig, BatchConfigBuilder, MessageBatcher};
-pub use circuit_breaker::{
-    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerStats, CircuitState,
-};
-pub use config::{
-    HealthCheckConfig, HealthCheckConfigBuilder, PoolConfig, PoolConfigBuilder, RabbitConfig,
-    RabbitConfigBuilder, RetryConfig, RetryConfigBuilder,
-};
-pub use connection::{Connection, ConnectionManager, ConnectionStats};
-pub use consumer::{
-    BaseConsumer, Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler,
-};
-pub use error::{ProcessingError, RabbitError, Result, RustRabbitError};
-pub use health::{ConnectionStatus, HealthChecker};
-pub use metrics::{MetricsTimer, RustRabbitMetrics};
-pub use patterns::{
-    // Message deduplication
-    deduplication::{
-        ContentHash, DeduplicatedMessage, DeduplicationConfig, DeduplicationManager,
-        DeduplicationResult, DeduplicationStrategy, DuplicateInfo, MessageId,
-    },
-    // Event sourcing
-    event_sourcing::{
-        AggregateId, AggregateRoot, AggregateSnapshot, DomainEvent, EventReplayService,
-        EventSequence, EventSourcingRepository, EventStore, InMemoryEventStore,
-    },
-    // Priority queues
-    priority::{
-        Priority, PriorityConsumer, PriorityMessage, PriorityQueue, PriorityQueueConfig,
-        PriorityRouter,
-    },
-    // Request-Response pattern
-    request_response::{
-        CorrelationId, RequestHandler, RequestMessage, RequestResponseClient,
-        RequestResponseServer, ResponseMessage,
-    },
-    // Saga pattern
-    saga::{
-        SagaAction, SagaCoordinator, SagaId, SagaInstance, SagaStatus, SagaStep, SagaStepExecutor,
-        StepResult, StepStatus,
-    },
-};
-pub use publisher::{
-    CustomExchangeDeclareOptions, CustomQueueDeclareOptions, PublishOptions, PublishOptionsBuilder,
-    Publisher,
-};
-pub use retry::{DelayedMessageExchange, RetryPolicy};
-pub use shutdown::{
-    setup_signal_handling, ShutdownConfig, ShutdownHandler, ShutdownManager, ShutdownSignal,
-};
+// Internal modules
+mod connection;
+mod consumer;
+mod error;
+mod publisher;
+mod retry;
 
-/// Main facade for the rust-rabbit library
-pub struct RustRabbit {
-    connection_manager: ConnectionManager,
-    metrics: Option<RustRabbitMetrics>,
-    shutdown_manager: Option<std::sync::Arc<ShutdownManager>>,
+/// Prelude module for convenient imports
+pub mod prelude {
+    pub use crate::{
+        Connection, Consumer, ConsumerBuilder, Message, PublishOptions, Publisher, Result,
+        RetryConfig, RetryMechanism, RustRabbitError,
+    };
 }
 
-impl RustRabbit {
-    /// Create a new RustRabbit instance with the given configuration
-    pub async fn new(config: RabbitConfig) -> Result<Self> {
-        let connection_manager = ConnectionManager::new(config).await?;
-        Ok(Self {
-            connection_manager,
-            metrics: None,
-            shutdown_manager: None,
-        })
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+    use std::time::Duration;
+
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    #[allow(dead_code)]
+    struct TestMessage {
+        id: u32,
+        content: String,
     }
 
-    /// Create a new RustRabbit instance with metrics enabled
-    pub async fn with_metrics(config: RabbitConfig, metrics: RustRabbitMetrics) -> Result<Self> {
-        let connection_manager = ConnectionManager::new(config).await?;
-        Ok(Self {
-            connection_manager,
-            metrics: Some(metrics),
-            shutdown_manager: None,
-        })
+    #[tokio::test]
+    async fn test_api_compilation() {
+        // This test ensures the API compiles correctly
+        // Real integration tests would require a RabbitMQ instance
+
+        let _connection_result = Connection::new("amqp://localhost:5672").await;
+
+        // Test retry configurations
+        let _exponential = RetryConfig::exponential_default();
+        let _linear = RetryConfig::linear(3, Duration::from_secs(5));
+        let _custom = RetryConfig::custom(vec![Duration::from_secs(1), Duration::from_secs(5)]);
+        let _no_retry = RetryConfig::no_retry();
     }
 
-    /// Get a publisher instance
-    pub fn publisher(&self) -> Publisher {
-        let mut publisher = Publisher::new(self.connection_manager.clone());
-        if let Some(metrics) = &self.metrics {
-            publisher.set_metrics(metrics.clone());
-        }
-        publisher
+    #[test]
+    fn test_basic_api_exists() {
+        // Test that our main types exist and can be referenced
+        use crate::prelude::*;
+
+        // This is a compile-time test - if it compiles, our API is accessible
+        let _: Option<Connection> = None;
+        let _: Option<Publisher> = None;
+        let _: Option<Consumer> = None;
+        let _: Option<RetryConfig> = None;
+
+        // Test that we can create basic configs
+        let _retry = RetryConfig::exponential_default();
+        let _options = PublishOptions::new();
     }
 
-    /// Create a consumer with the given options
-    pub async fn consumer(&self, options: ConsumerOptions) -> Result<Consumer> {
-        let mut consumer = Consumer::new(self.connection_manager.clone(), options).await?;
-        if let Some(metrics) = &self.metrics {
-            consumer.set_metrics(metrics.clone());
-        }
-        Ok(consumer)
+    #[test]
+    fn test_retry_config_calculations() {
+        let config = RetryConfig::exponential(5, Duration::from_secs(1), Duration::from_secs(30));
+
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(2)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(4)));
+        assert_eq!(config.calculate_delay(3), Some(Duration::from_secs(8)));
+        assert_eq!(config.calculate_delay(4), Some(Duration::from_secs(16)));
+        // Attempt 5 exceeds max_retries (5), so should return None
+        assert_eq!(config.calculate_delay(5), None);
     }
 
-    /// Get the health checker
-    pub fn health_checker(&self) -> HealthChecker {
-        let mut health_checker = HealthChecker::new(self.connection_manager.clone());
-        if let Some(metrics) = &self.metrics {
-            health_checker.set_metrics(metrics.clone());
-        }
-        health_checker
+    #[test]
+    fn test_retry_config_linear() {
+        let config = RetryConfig::linear(3, Duration::from_secs(5));
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(3), None); // Exceeds max_retries
     }
 
-    /// Get the metrics instance if enabled
-    pub fn metrics(&self) -> Option<&RustRabbitMetrics> {
-        self.metrics.as_ref()
+    #[test]
+    fn test_retry_config_custom() {
+        let delays = vec![
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Duration::from_secs(7),
+        ];
+        let config = RetryConfig::custom(delays.clone());
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(3)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(7)));
+        assert_eq!(config.calculate_delay(3), None); // Exceeds max_retries
     }
 
-    /// Create a message batcher for high-throughput publishing
-    pub async fn create_batcher(&self, config: BatchConfig) -> Result<MessageBatcher> {
-        let publisher = self.publisher();
+    #[test]
+    fn test_publish_options() {
+        let options = PublishOptions::new()
+            .mandatory()
+            .with_expiration("60000")
+            .with_priority(5);
 
-        if let Some(metrics) = &self.metrics {
-            MessageBatcher::with_metrics(publisher, config, metrics.clone()).await
-        } else {
-            MessageBatcher::new(publisher, config).await
-        }
-    }
-
-    /// Enable graceful shutdown handling
-    pub fn enable_shutdown_handling(
-        &mut self,
-        config: ShutdownConfig,
-    ) -> std::sync::Arc<ShutdownManager> {
-        let shutdown_manager = std::sync::Arc::new(ShutdownManager::new(config));
-        self.shutdown_manager = Some(shutdown_manager.clone());
-        shutdown_manager
-    }
-
-    /// Get the shutdown manager if enabled
-    pub fn shutdown_manager(&self) -> Option<std::sync::Arc<ShutdownManager>> {
-        self.shutdown_manager.clone()
-    }
-
-    /// Close all connections with optional graceful shutdown
-    pub async fn close(&self) -> Result<()> {
-        if let Some(shutdown_manager) = &self.shutdown_manager {
-            shutdown_manager.shutdown(ShutdownSignal::Graceful).await?;
-        }
-        self.connection_manager.close().await
+        assert!(options.mandatory);
+        assert_eq!(options.expiration, Some("60000".to_string()));
+        assert_eq!(options.priority, Some(5));
     }
 }

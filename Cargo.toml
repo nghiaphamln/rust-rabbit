@@ -1,13 +1,14 @@
 [package]
 name = "rust-rabbit"
-version = "0.3.2"
+version = "1.0.0"
 edition = "2021"
-description = "A high-performance, production-ready RabbitMQ client library for Rust with zero-configuration simplicity, advanced retry patterns, enterprise messaging patterns, and comprehensive observability. Features one-line setup, automatic retry policies, Request-Response/Saga/Event Sourcing patterns, Prometheus metrics, and circuit breaker resilience."
+resolver = "2"
+description = "A simple, reliable RabbitMQ client library for Rust. Easy to use with flexible retry mechanisms and minimal configuration."
 license = "MIT"
 authors = ["Minh Nghĩa <nghiaphamln3@gmail.com>"]
 repository = "https://github.com/nghiaphamln/rust-rabbit"
 readme = "README.md"
-keywords = ["rabbitmq", "messaging", "amqp", "queue", "masstransit"]
+keywords = ["rabbitmq", "messaging", "amqp", "queue", "simple"]
 categories = ["network-programming", "asynchronous"]
 
 [dependencies]
@@ -15,7 +16,7 @@ categories = ["network-programming", "asynchronous"]
 tokio = { version = "1.0", features = ["full"] }
 
 # RabbitMQ client
-lapin = "2.0"
+lapin = "2.5"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -23,44 +24,24 @@ serde_json = "1.0"
 
 # Error handling
 thiserror = "1.0"
-anyhow = "1.0"
 
-# Logging and tracing
+# Logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
 
-# Time handling
+# Time handling for retry delays
 chrono = { version = "0.4", features = ["serde"] }
-tokio-util = "0.7"
 
-# Async traits
-async-trait = "0.1"
+# URL parsing for connection strings
+url = "2.0"
 
-# UUID generation
-uuid = { version = "1.0", features = ["v4", "serde"] }
+# Fast random number generation for examples
+fastrand = "2.3.0"
 
-# Connection pooling and utilities
-futures = "0.3"
-futures-util = "0.3"
-
-# Configuration
-config = "0.14"
-
-# Random number generation
-fastrand = "2.0"
-
-# Metrics and observability
-prometheus = "0.14"
-metrics = "0.22"
-metrics-prometheus = "0.11"
-
-# Force secure version of protobuf due to RUSTSEC-2024-0437
-protobuf = ">=3.7.2"
+# Stream utilities for consumer
+futures-lite = "2.0"
 
 [dev-dependencies]
-# Web server for metrics endpoint in examples
-warp = "0.3"
 tokio-test = "0.4"
-mockall = "0.12"
 anyhow = "1.0"
 tracing-test = "0.2"
+tracing-subscriber = "0.3"

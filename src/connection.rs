@@ -1,299 +1,238 @@
-use crate::{
-    circuit_breaker::{CircuitBreaker, CircuitBreakerConfig},
-    config::RabbitConfig,
-    error::{RabbitError, Result},
-};
+//! Simplified Connection Management for rust-rabbit
+//!
+//! Basic RabbitMQ connection handling without complex pooling or health monitoring.
+//! Just simple, reliable connection management.
+
+use crate::error::RustRabbitError;
 use lapin::{Channel, Connection as LapinConnection, ConnectionProperties};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
-use tokio::time::{sleep, timeout, Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
+use url::Url;
 
-/// Connection wrapper with metadata
+/// Simple connection configuration
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    /// Connection URL (e.g., "amqp://user:pass@localhost:5672/vhost")
+    pub url: String,
+
+    /// Connection timeout in seconds
+    pub connection_timeout: u64,
+
+    /// Heartbeat interval in seconds (0 to disable)
+    pub heartbeat: u64,
+}
+
+impl ConnectionConfig {
+    /// Create a new connection config with URL
+    pub fn new(url: &str) -> Self {
+        Self {
+            url: url.to_string(),
+            connection_timeout: 30,
+            heartbeat: 60,
+        }
+    }
+
+    /// Set connection timeout
+    pub fn connection_timeout(mut self, timeout_secs: u64) -> Self {
+        self.connection_timeout = timeout_secs;
+        self
+    }
+
+    /// Set heartbeat interval (0 to disable)
+    pub fn heartbeat(mut self, heartbeat_secs: u64) -> Self {
+        self.heartbeat = heartbeat_secs;
+        self
+    }
+}
+
+/// Simple RabbitMQ connection wrapper
 #[derive(Debug)]
 pub struct Connection {
-    inner: LapinConnection,
-    created_at: Instant,
-    last_used: Arc<RwLock<Instant>>,
+    inner: Arc<RwLock<Option<LapinConnection>>>,
+    config: ConnectionConfig,
 }
 
 impl Connection {
-    pub fn new(connection: LapinConnection) -> Self {
-        let now = Instant::now();
-        Self {
-            inner: connection,
-            created_at: now,
-            last_used: Arc::new(RwLock::new(now)),
-        }
+    /// Create a new connection
+    ///
+    /// # Arguments
+    /// * `url` - RabbitMQ connection URL (e.g., "amqp://localhost:5672")
+    ///
+    /// # Example
+    /// ```rust,no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// use rust_rabbit::Connection;
+    ///
+    /// let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn new(url: &str) -> Result<Arc<Self>, RustRabbitError> {
+        let config = ConnectionConfig::new(url);
+        Self::with_config(config).await
     }
 
-    pub fn inner(&self) -> &LapinConnection {
-        &self.inner
-    }
-
-    pub async fn create_channel(&self) -> Result<Channel> {
-        let mut last_used = self.last_used.write().await;
-        *last_used = Instant::now();
-        Ok(self.inner.create_channel().await?)
-    }
-
-    pub fn is_connected(&self) -> bool {
-        self.inner.status().connected()
-    }
-
-    pub async fn last_used(&self) -> Instant {
-        *self.last_used.read().await
-    }
-
-    pub fn created_at(&self) -> Instant {
-        self.created_at
-    }
-}
-
-/// Connection statistics
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
-pub struct ConnectionStats {
-    pub total_connections: usize,
-    pub healthy_connections: usize,
-    pub unhealthy_connections: usize,
-}
-
-/// Connection manager with pooling and health monitoring
-#[derive(Debug, Clone)]
-pub struct ConnectionManager {
-    pub config: RabbitConfig,
-    connections: Arc<RwLock<Vec<Arc<Connection>>>>,
-    #[allow(dead_code)] // Will be used for connection tracking in future versions
-    connection_counter: Arc<Mutex<usize>>,
-    #[allow(dead_code)]
-    circuit_breaker: Arc<CircuitBreaker>,
-}
-
-impl ConnectionManager {
-    /// Create a new connection manager
-    pub async fn new(config: RabbitConfig) -> Result<Self> {
-        let circuit_breaker_config = CircuitBreakerConfig {
-            failure_threshold: 5,
-            failure_window: Duration::from_secs(60),
-            recovery_timeout: Duration::from_secs(30),
-            success_threshold: 3,
-            half_open_max_requests: 5,
-        };
-
-        let manager = Self {
+    /// Create a new connection with custom configuration
+    pub async fn with_config(config: ConnectionConfig) -> Result<Arc<Self>, RustRabbitError> {
+        let connection = Self {
+            inner: Arc::new(RwLock::new(None)),
             config,
-            connections: Arc::new(RwLock::new(Vec::new())),
-            connection_counter: Arc::new(Mutex::new(0)),
-            circuit_breaker: Arc::new(CircuitBreaker::with_config(circuit_breaker_config)),
         };
 
-        // Initialize minimum connections
-        manager.ensure_min_connections().await?;
+        let arc_connection = Arc::new(connection);
+        arc_connection.connect().await?;
 
-        // Start background health monitoring
-        if manager.config.health_check.enabled {
-            manager.start_health_monitoring().await;
-        }
-
-        Ok(manager)
+        Ok(arc_connection)
     }
 
-    /// Get a connection from the pool
-    pub async fn get_connection(&self) -> Result<Arc<Connection>> {
-        let connections = self.connections.read().await;
-
-        // Find a healthy connection
-        for conn in connections.iter() {
-            if conn.is_connected() {
-                return Ok(conn.clone());
-            }
-        }
-
-        // No healthy connections found, drop the read lock and create new one
-        drop(connections);
-
-        self.create_new_connection().await
+    /// Get connection URL for debugging
+    pub fn url(&self) -> &str {
+        &self.config.url
     }
 
-    /// Create a new connection with retry mechanism
-    async fn create_new_connection(&self) -> Result<Arc<Connection>> {
-        let mut retry_count = 0;
-        let mut delay = self.config.retry_config.initial_delay;
-
-        loop {
-            match self.establish_connection().await {
-                Ok(connection) => {
-                    let conn = Arc::new(Connection::new(connection));
-
-                    // Add to pool if not at max capacity
-                    let mut connections = self.connections.write().await;
-                    if connections.len() < self.config.pool_config.max_connections {
-                        connections.push(conn.clone());
-                    }
-
-                    info!("Successfully established new RabbitMQ connection");
-                    return Ok(conn);
-                }
-                Err(e) => {
-                    retry_count += 1;
-                    if retry_count > self.config.retry_config.max_retries {
-                        error!(
-                            "Failed to establish connection after {} retries: {}",
-                            retry_count, e
-                        );
-                        return Err(RabbitError::RetryExhausted(format!(
-                            "Connection failed after {} retries",
-                            retry_count
-                        )));
-                    }
-
-                    warn!(
-                        "Connection attempt {} failed: {}. Retrying in {:?}",
-                        retry_count, e, delay
-                    );
-
-                    sleep(delay).await;
-                    delay = self.calculate_next_delay(delay);
-                }
-            }
-        }
-    }
-
-    /// Establish a raw connection to RabbitMQ
-    async fn establish_connection(&self) -> Result<LapinConnection> {
-        let connection_future = LapinConnection::connect(
-            &self.config.connection_string,
-            ConnectionProperties::default(),
-        );
-
-        if let Some(timeout_duration) = self.config.connection_timeout {
-            timeout(timeout_duration, connection_future)
-                .await
-                .map_err(|_| RabbitError::Timeout("Connection timeout".to_string()))?
-                .map_err(RabbitError::Connection)
+    /// Check if connection is active
+    pub async fn is_connected(&self) -> bool {
+        let conn_guard = self.inner.read().await;
+        if let Some(ref conn) = *conn_guard {
+            conn.status().connected()
         } else {
-            connection_future.await.map_err(RabbitError::Connection)
+            false
         }
     }
 
-    /// Calculate the next retry delay with exponential backoff and jitter
-    fn calculate_next_delay(&self, current_delay: Duration) -> Duration {
-        let base_delay = Duration::from_millis(
-            (current_delay.as_millis() as f64 * self.config.retry_config.backoff_multiplier) as u64,
-        );
+    /// Create a new channel
+    ///
+    /// Automatically reconnects if the connection is lost.
+    pub async fn create_channel(&self) -> Result<Channel, RustRabbitError> {
+        // Check if we need to reconnect
+        if !self.is_connected().await {
+            warn!("Connection lost, attempting to reconnect...");
+            self.reconnect().await?;
+        }
 
-        let max_delay = self.config.retry_config.max_delay;
-        let delay = if base_delay > max_delay {
-            max_delay
+        let conn_guard = self.inner.read().await;
+        if let Some(ref conn) = *conn_guard {
+            let channel = conn.create_channel().await?;
+            debug!("Created new channel");
+            Ok(channel)
         } else {
-            base_delay
-        };
-
-        // Add jitter
-        if self.config.retry_config.jitter > 0.0 {
-            let jitter_amount = (delay.as_millis() as f64 * self.config.retry_config.jitter) as u64;
-            let jitter = fastrand::u64(0..=jitter_amount);
-            Duration::from_millis(delay.as_millis() as u64 + jitter)
-        } else {
-            delay
+            Err(RustRabbitError::Connection(
+                "No active connection".to_string(),
+            ))
         }
     }
 
-    /// Ensure minimum number of connections are available
-    async fn ensure_min_connections(&self) -> Result<()> {
-        let connections = self.connections.read().await;
-        let healthy_count = connections.iter().filter(|c| c.is_connected()).count();
+    /// Manually reconnect
+    pub async fn reconnect(&self) -> Result<(), RustRabbitError> {
+        info!("Reconnecting to RabbitMQ...");
+        self.connect().await
+    }
 
-        if healthy_count >= self.config.pool_config.min_connections {
-            return Ok(());
+    /// Close the connection
+    pub async fn close(&self) -> Result<(), RustRabbitError> {
+        let mut conn_guard = self.inner.write().await;
+        if let Some(conn) = conn_guard.take() {
+            conn.close(200, "Normal shutdown").await?;
+            info!("Connection closed");
         }
-
-        drop(connections);
-
-        let needed = self.config.pool_config.min_connections - healthy_count;
-        debug!(
-            "Creating {} connections to meet minimum requirement",
-            needed
-        );
-
-        for _ in 0..needed {
-            if let Err(e) = self.create_new_connection().await {
-                warn!("Failed to create minimum connection: {}", e);
-            }
-        }
-
         Ok(())
     }
 
-    /// Start background health monitoring
-    async fn start_health_monitoring(&self) {
-        let manager = self.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(manager.config.health_check.check_interval);
+    /// Internal connection establishment
+    async fn connect(&self) -> Result<(), RustRabbitError> {
+        // Validate URL
+        let _parsed_url = Url::parse(&self.config.url)
+            .map_err(|e| RustRabbitError::Configuration(format!("Invalid URL: {}", e)))?;
 
-            loop {
-                interval.tick().await;
-                manager.perform_health_check().await;
-            }
+        // Create connection properties (heartbeat removed - not available in this lapin version)
+        let properties = ConnectionProperties::default();
+
+        // Establish connection
+        debug!("Connecting to RabbitMQ at {}", self.config.url);
+
+        let connection = LapinConnection::connect(&self.config.url, properties).await?;
+
+        info!("Successfully connected to RabbitMQ");
+
+        // Store connection
+        let mut conn_guard = self.inner.write().await;
+        *conn_guard = Some(connection);
+
+        Ok(())
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        // Connection will be automatically closed when dropped
+        debug!("Connection dropped");
+    }
+}
+
+/// Connection builder for fluent configuration
+pub struct ConnectionBuilder {
+    config: ConnectionConfig,
+}
+
+impl ConnectionBuilder {
+    /// Create a new connection builder
+    pub fn new(url: &str) -> Self {
+        Self {
+            config: ConnectionConfig::new(url),
+        }
+    }
+
+    /// Set connection timeout
+    pub fn connection_timeout(mut self, timeout_secs: u64) -> Self {
+        self.config = self.config.connection_timeout(timeout_secs);
+        self
+    }
+
+    /// Set heartbeat interval
+    pub fn heartbeat(mut self, heartbeat_secs: u64) -> Self {
+        self.config = self.config.heartbeat(heartbeat_secs);
+        self
+    }
+
+    /// Build and connect
+    pub async fn connect(self) -> Result<Arc<Connection>, RustRabbitError> {
+        Connection::with_config(self.config).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connection_config() {
+        let config = ConnectionConfig::new("amqp://localhost:5672")
+            .connection_timeout(60)
+            .heartbeat(30);
+
+        assert_eq!(config.url, "amqp://localhost:5672");
+        assert_eq!(config.connection_timeout, 60);
+        assert_eq!(config.heartbeat, 30);
+    }
+
+    #[test]
+    fn test_connection_builder() {
+        let builder = ConnectionBuilder::new("amqp://localhost:5672")
+            .connection_timeout(45)
+            .heartbeat(20);
+
+        assert_eq!(builder.config.url, "amqp://localhost:5672");
+        assert_eq!(builder.config.connection_timeout, 45);
+        assert_eq!(builder.config.heartbeat, 20);
+    }
+
+    #[test]
+    fn test_invalid_url() {
+        let result = std::panic::catch_unwind(|| {
+            let _config = ConnectionConfig::new("invalid-url");
         });
-    }
 
-    /// Perform health check on all connections
-    async fn perform_health_check(&self) {
-        let mut connections = self.connections.write().await;
-        let mut unhealthy_indices = Vec::new();
-
-        for (i, conn) in connections.iter().enumerate() {
-            if !conn.is_connected() {
-                debug!("Connection {} is unhealthy, marking for removal", i);
-                unhealthy_indices.push(i);
-            }
-        }
-
-        // Remove unhealthy connections (in reverse order to maintain indices)
-        for &i in unhealthy_indices.iter().rev() {
-            connections.remove(i);
-        }
-
-        if !unhealthy_indices.is_empty() {
-            info!("Removed {} unhealthy connections", unhealthy_indices.len());
-        }
-
-        drop(connections);
-
-        // Ensure we have minimum connections
-        if let Err(e) = self.ensure_min_connections().await {
-            warn!(
-                "Failed to ensure minimum connections during health check: {}",
-                e
-            );
-        }
-    }
-
-    /// Get connection statistics
-    pub async fn get_stats(&self) -> ConnectionStats {
-        let connections = self.connections.read().await;
-        let total = connections.len();
-        let healthy = connections.iter().filter(|c| c.is_connected()).count();
-
-        ConnectionStats {
-            total_connections: total,
-            healthy_connections: healthy,
-            unhealthy_connections: total - healthy,
-        }
-    }
-
-    /// Close all connections
-    pub async fn close(&self) -> Result<()> {
-        let mut connections = self.connections.write().await;
-
-        for conn in connections.drain(..) {
-            if let Err(e) = conn.inner().close(0, "Shutdown").await {
-                warn!("Error closing connection: {}", e);
-            }
-        }
-
-        info!("All connections closed");
-        Ok(())
+        assert!(result.is_ok()); // Config creation should not panic, validation happens on connect
     }
 }
