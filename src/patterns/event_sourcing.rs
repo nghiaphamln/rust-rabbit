@@ -451,7 +451,11 @@ where
             .await?;
 
         // Take snapshot if needed
-        if aggregate.sequence().value().is_multiple_of(self.snapshot_frequency) {
+        if aggregate
+            .sequence()
+            .value()
+            .is_multiple_of(self.snapshot_frequency)
+        {
             let snapshot = aggregate.create_snapshot()?;
             self.event_store.save_snapshot(snapshot).await?;
 

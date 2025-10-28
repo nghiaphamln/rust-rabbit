@@ -270,9 +270,9 @@ impl DeduplicationManager {
         let dedup_key = message.get_dedup_key(&self.config.strategy);
         let mut cache = self.dedup_cache.lock().unwrap();
 
-        cache.entry(dedup_key).or_insert_with(|| {
-            DeduplicationRecord::new(message.message_id.clone())
-        });
+        cache
+            .entry(dedup_key)
+            .or_insert_with(|| DeduplicationRecord::new(message.message_id.clone()));
 
         Ok(())
     }

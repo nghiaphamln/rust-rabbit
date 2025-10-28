@@ -12,7 +12,9 @@ use uuid::Uuid;
 use crate::error::RustRabbitError;
 
 /// Message priority levels
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Default, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub enum Priority {
     /// Lowest priority - processed last
     Low = 1,
