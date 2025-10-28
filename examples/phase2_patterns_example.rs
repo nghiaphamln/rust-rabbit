@@ -30,11 +30,11 @@ async fn main() -> Result<()> {
 async fn demo_request_response() -> Result<()> {
     println!("   Setting up Request-Response client...");
 
-    let client = RequestResponseClient::new(Duration::from_secs(30));
+    let _client = RequestResponseClient::new(Duration::from_secs(30));
 
     // Simulate sending a request
     println!("   📤 Sending request message...");
-    let request_payload = b"{'action': 'get_user', 'user_id': 123}".to_vec();
+        let _request_payload = b"{'action': 'get_user', 'user_id': 123}";
 
     // In a real scenario, this would integrate with RabbitMQ
     println!("   ⏳ Would send request to queue and wait for response...");

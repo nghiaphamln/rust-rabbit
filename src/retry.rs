@@ -84,6 +84,281 @@ impl RetryPolicy {
             .replace("{queue_name}", original_queue)
             .replace("{attempt}", &attempt.to_string())
     }
+
+    /// Create a fast retry policy (quick retries for transient errors)
+    pub fn fast() -> Self {
+        Self {
+            max_retries: 5,
+            initial_delay: Duration::from_millis(200),
+            max_delay: Duration::from_secs(10),
+            backoff_multiplier: 1.5,
+            jitter: 0.05,
+            dead_letter_exchange: Some("fast.dlx".to_string()),
+            dead_letter_queue: Some("fast.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a fast retry policy with custom dead letter names based on queue
+    pub fn fast_for_queue<S: Into<String>>(queue_name: S) -> Self {
+        let queue = queue_name.into();
+        Self {
+            max_retries: 5,
+            initial_delay: Duration::from_millis(200),
+            max_delay: Duration::from_secs(10),
+            backoff_multiplier: 1.5,
+            jitter: 0.05,
+            dead_letter_exchange: Some(format!("{}.dlx", queue)),
+            dead_letter_queue: Some(format!("{}.dlq", queue)),
+            ..Default::default()
+        }
+    }
+
+    /// Create a slow retry policy (for operations that need more time)
+    pub fn slow() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_secs(5),
+            max_delay: Duration::from_secs(300), // 5 minutes
+            backoff_multiplier: 2.5,
+            jitter: 0.2,
+            dead_letter_exchange: Some("slow.dlx".to_string()),
+            dead_letter_queue: Some("slow.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a slow retry policy with custom dead letter names based on queue
+    pub fn slow_for_queue<S: Into<String>>(queue_name: S) -> Self {
+        let queue = queue_name.into();
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_secs(5),
+            max_delay: Duration::from_secs(300),
+            backoff_multiplier: 2.5,
+            jitter: 0.2,
+            dead_letter_exchange: Some(format!("{}.dlx", queue)),
+            dead_letter_queue: Some(format!("{}.dlq", queue)),
+            ..Default::default()
+        }
+    }
+
+    /// Create an aggressive retry policy (many attempts with exponential backoff)
+    pub fn aggressive() -> Self {
+        Self {
+            max_retries: 10,
+            initial_delay: Duration::from_millis(100),
+            max_delay: Duration::from_secs(120), // 2 minutes
+            backoff_multiplier: 2.0,
+            jitter: 0.15,
+            dead_letter_exchange: Some("aggressive.dlx".to_string()),
+            dead_letter_queue: Some("aggressive.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a conservative retry policy (few attempts, larger delays)
+    pub fn conservative() -> Self {
+        Self {
+            max_retries: 2,
+            initial_delay: Duration::from_secs(30),
+            max_delay: Duration::from_secs(600), // 10 minutes
+            backoff_multiplier: 2.0,
+            jitter: 0.3,
+            dead_letter_exchange: Some("conservative.dlx".to_string()),
+            dead_letter_queue: Some("conservative.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a linear retry policy (fixed delay between retries)
+    pub fn linear(delay: Duration, max_retries: u32) -> Self {
+        Self {
+            max_retries,
+            initial_delay: delay,
+            max_delay: delay,        // Same as initial = linear
+            backoff_multiplier: 1.0, // No exponential growth
+            jitter: 0.0,
+            dead_letter_exchange: Some("linear.dlx".to_string()),
+            dead_letter_queue: Some("linear.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a no-retry policy (fail immediately, no retries)
+    pub fn no_retry() -> Self {
+        Self {
+            max_retries: 0,
+            initial_delay: Duration::from_secs(0),
+            max_delay: Duration::from_secs(0),
+            backoff_multiplier: 1.0,
+            jitter: 0.0,
+            dead_letter_exchange: Some("immediate.dlx".to_string()),
+            dead_letter_queue: Some("immediate.dlq".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Create a minutes-based exponential retry policy (1min, 2min, 4min, 8min, 16min)
+    pub fn minutes_exponential() -> Self {
+        Self {
+            max_retries: 5,
+            initial_delay: Duration::from_secs(60), // 1 minute
+            max_delay: Duration::from_secs(1800),   // 30 minutes cap
+            backoff_multiplier: 2.0,                // Double each time
+            jitter: 0.1,                            // 10% jitter
+            retry_queue_pattern: "{queue_name}.retry.{attempt}".to_string(),
+            dead_letter_exchange: Some("minutes.dlx".to_string()),
+            dead_letter_queue: Some("minutes.dlq".to_string()),
+        }
+    }
+
+    /// Create a minutes-based exponential retry policy with custom dead letter names
+    pub fn minutes_exponential_for_queue<S: Into<String>>(queue_name: S) -> Self {
+        let queue = queue_name.into();
+        Self {
+            max_retries: 5,
+            initial_delay: Duration::from_secs(60),
+            max_delay: Duration::from_secs(1800),
+            backoff_multiplier: 2.0,
+            jitter: 0.1,
+            retry_queue_pattern: "{queue_name}.retry.{attempt}".to_string(),
+            dead_letter_exchange: Some(format!("{}.dlx", queue)),
+            dead_letter_queue: Some(format!("{}.dlq", queue)),
+        }
+    }
+
+    /// Create a custom retry policy with builder pattern
+    pub fn builder() -> RetryPolicyBuilder {
+        RetryPolicyBuilder::new()
+    }
+}
+
+/// Builder for RetryPolicy
+#[derive(Debug, Clone)]
+pub struct RetryPolicyBuilder {
+    max_retries: u32,
+    initial_delay: Duration,
+    max_delay: Duration,
+    backoff_multiplier: f64,
+    jitter: f64,
+    retry_queue_pattern: String,
+    dead_letter_exchange: Option<String>,
+    dead_letter_queue: Option<String>,
+}
+
+impl RetryPolicyBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            max_retries: 3,
+            initial_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(60),
+            backoff_multiplier: 2.0,
+            jitter: 0.1,
+            retry_queue_pattern: "{queue_name}.retry.{attempt}".to_string(),
+            dead_letter_exchange: Some("dead-letter".to_string()),
+            dead_letter_queue: Some("dead-letter-queue".to_string()),
+        }
+    }
+
+    /// Set maximum number of retry attempts
+    pub fn max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
+    /// Set initial delay between retries
+    pub fn initial_delay(mut self, delay: Duration) -> Self {
+        self.initial_delay = delay;
+        self
+    }
+
+    /// Set maximum delay between retries
+    pub fn max_delay(mut self, delay: Duration) -> Self {
+        self.max_delay = delay;
+        self
+    }
+
+    /// Set backoff multiplier for exponential backoff
+    pub fn backoff_multiplier(mut self, multiplier: f64) -> Self {
+        self.backoff_multiplier = multiplier;
+        self
+    }
+
+    /// Set jitter factor (0.0 to 1.0)
+    pub fn jitter(mut self, jitter: f64) -> Self {
+        self.jitter = jitter.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set dead letter exchange name
+    pub fn dead_letter_exchange<S: Into<String>>(mut self, exchange: S) -> Self {
+        self.dead_letter_exchange = Some(exchange.into());
+        self
+    }
+
+    /// Set dead letter queue name
+    pub fn dead_letter_queue<S: Into<String>>(mut self, queue: S) -> Self {
+        self.dead_letter_queue = Some(queue.into());
+        self
+    }
+
+    /// Disable dead letter exchange (messages will be discarded after max retries)
+    pub fn no_dead_letter(mut self) -> Self {
+        self.dead_letter_exchange = None;
+        self.dead_letter_queue = None;
+        self
+    }
+
+    /// Set retry queue naming pattern
+    pub fn retry_queue_pattern<S: Into<String>>(mut self, pattern: S) -> Self {
+        self.retry_queue_pattern = pattern.into();
+        self
+    }
+
+    /// Configure for fast retries (preset)
+    pub fn fast_preset(mut self) -> Self {
+        self.max_retries = 5;
+        self.initial_delay = Duration::from_millis(200);
+        self.max_delay = Duration::from_secs(10);
+        self.backoff_multiplier = 1.5;
+        self.jitter = 0.05;
+        self
+    }
+
+    /// Configure for slow retries (preset)
+    pub fn slow_preset(mut self) -> Self {
+        self.max_retries = 3;
+        self.initial_delay = Duration::from_secs(5);
+        self.max_delay = Duration::from_secs(300);
+        self.backoff_multiplier = 2.5;
+        self.jitter = 0.2;
+        self
+    }
+
+    /// Configure for linear retries (preset)
+    pub fn linear_preset(mut self, delay: Duration) -> Self {
+        self.initial_delay = delay;
+        self.max_delay = delay;
+        self.backoff_multiplier = 1.0;
+        self.jitter = 0.0;
+        self
+    }
+
+    /// Build the final RetryPolicy
+    pub fn build(self) -> RetryPolicy {
+        RetryPolicy {
+            max_retries: self.max_retries,
+            initial_delay: self.initial_delay,
+            max_delay: self.max_delay,
+            backoff_multiplier: self.backoff_multiplier,
+            jitter: self.jitter,
+            retry_queue_pattern: self.retry_queue_pattern,
+            dead_letter_exchange: self.dead_letter_exchange,
+            dead_letter_queue: self.dead_letter_queue,
+        }
+    }
 }
 
 /// Delayed Message Exchange handler for implementing retry mechanism

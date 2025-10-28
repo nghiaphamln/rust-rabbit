@@ -223,6 +223,11 @@ impl Publisher {
         connection.create_channel().await
     }
 
+    /// Get connection from the connection manager (public method for consumer)
+    pub async fn get_connection(&self) -> Result<std::sync::Arc<crate::connection::Connection>> {
+        self.connection_manager.get_connection().await
+    }
+
     /// Serialize message to bytes
     fn serialize_message<T>(&self, message: &T) -> Result<Vec<u8>>
     where

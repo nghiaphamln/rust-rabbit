@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     // Example 1: Basic configuration using builder pattern
-    let config = RabbitConfig::builder()
+    let _config = RabbitConfig::builder()
         .connection_string("amqp://localhost:5672")
         .virtual_host("my-vhost")
         .connection_timeout(Duration::from_secs(10))
@@ -62,14 +62,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Example 2: Advanced config created");
 
     // Example 3: Environment-specific configurations
-    let dev_config = RabbitConfig::builder()
+    let _dev_config = RabbitConfig::builder()
         .connection_string("amqp://localhost:5672")
         .retry(|retry| retry.conservative())
         .health(|health| health.infrequent())
         .pool(|pool| pool.single_connection())
         .build();
 
-    let prod_config = RabbitConfig::builder()
+    let _prod_config = RabbitConfig::builder()
         .connection_string("amqp://prod-server:5672")
         .connection_timeout(Duration::from_secs(30))
         .retry(|retry| retry.aggressive())
@@ -100,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .auto_declare_queue()
         .build();
 
-    let rpc_publish_options = PublishOptions::builder()
+    let _rpc_publish_options = PublishOptions::builder()
         .request_response("reply-queue", "correlation-456")
         .ttl(Duration::from_secs(30))
         .production()
@@ -115,14 +115,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .development()
         .build();
 
-    let high_throughput_consumer_options = ConsumerOptions::builder("high-volume-orders")
+        let _high_throughput_consumer_options = ConsumerOptions::builder("high-throughput.queue")
         .consumer_tag("bulk-processor")
         .high_throughput()
         .auto_declare_queue()
         .dead_letter_exchange("failed-orders")
         .build();
 
-    let reliable_consumer_options = ConsumerOptions::builder("critical-orders")
+        let _reliable_consumer_options = ConsumerOptions::builder("critical.queue")
         .consumer_tag("critical-processor")
         .reliable()
         .manual_ack()
@@ -156,8 +156,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Messages published successfully");
 
     // Create consumer with builder options
-    let consumer = rabbit.consumer(basic_consumer_options).await?;
-    let handler = Arc::new(OrderHandler);
+    let _consumer = rabbit.consumer(basic_consumer_options).await?;
+    let _handler = Arc::new(OrderHandler);
 
     info!("Starting consumer with builder configuration...");
 
