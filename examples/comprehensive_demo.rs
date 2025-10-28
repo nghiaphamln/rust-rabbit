@@ -4,7 +4,7 @@ use rust_rabbit::{
     connection::ConnectionManager,
     consumer::{Consumer, ConsumerOptions, MessageContext, MessageHandler, MessageResult},
     error::Result,
-    publisher::{Publisher, PublishOptions},
+    publisher::{PublishOptions, Publisher},
 };
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
@@ -51,7 +51,10 @@ impl MessageHandler<OrderEvent> for OrderProcessor {
                     );
                     MessageResult::Retry
                 } else {
-                    info!("✅ Payment succeeded for order {} after retries", message.order_id);
+                    info!(
+                        "✅ Payment succeeded for order {} after retries",
+                        message.order_id
+                    );
                     MessageResult::Ack
                 }
             }
@@ -76,7 +79,10 @@ impl MessageHandler<OrderEvent> for OrderProcessor {
                 MessageResult::Ack
             }
             "permanent_failure" => {
-                error!("💥 Order {} has invalid data - permanent failure", message.order_id);
+                error!(
+                    "💥 Order {} has invalid data - permanent failure",
+                    message.order_id
+                );
                 MessageResult::Reject
             }
             _ => {
@@ -185,7 +191,10 @@ async fn main() -> Result<()> {
             )
             .await?;
 
-        info!("📤 Published order: {} ({})", order.order_id, order.event_type);
+        info!(
+            "📤 Published order: {} ({})",
+            order.order_id, order.event_type
+        );
         sleep(Duration::from_millis(500)).await;
     }
 

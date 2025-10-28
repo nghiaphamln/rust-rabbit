@@ -34,7 +34,7 @@ async fn demo_request_response() -> Result<()> {
 
     // Simulate sending a request
     println!("   📤 Sending request message...");
-        let _request_payload = b"{'action': 'get_user', 'user_id': 123}";
+    let _request_payload = b"{'action': 'get_user', 'user_id': 123}";
 
     // In a real scenario, this would integrate with RabbitMQ
     println!("   ⏳ Would send request to queue and wait for response...");

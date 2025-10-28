@@ -115,14 +115,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .development()
         .build();
 
-        let _high_throughput_consumer_options = ConsumerOptions::builder("high-throughput.queue")
+    let _high_throughput_consumer_options = ConsumerOptions::builder("high-throughput.queue")
         .consumer_tag("bulk-processor")
         .high_throughput()
         .auto_declare_queue()
         .dead_letter_exchange("failed-orders")
         .build();
 
-        let _reliable_consumer_options = ConsumerOptions::builder("critical.queue")
+    let _reliable_consumer_options = ConsumerOptions::builder("critical.queue")
         .consumer_tag("critical-processor")
         .reliable()
         .manual_ack()

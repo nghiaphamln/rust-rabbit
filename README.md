@@ -5,35 +5,54 @@
 [![Documentation](https://docs.rs/rust-rabbit/badge.svg)](https://docs.rs/rust-rabbit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance, production-ready RabbitMQ client library for Rust with **zero-configuration** simplicity and enterprise-grade features. Built for reliability, observability, and developer happiness.
+A **high-performance, production-ready** RabbitMQ client library for Rust with **zero-configuration** simplicity and enterprise-grade features. Built for reliability, observability, and developer happiness.
 
 ## 🚀 **Quick Start - One Line Magic!**
 
 ```rust
-use rust_rabbit::{RustRabbit, RabbitConfig, consumer::ConsumerOptions};
+use rust_rabbit::{
+    config::RabbitConfig,
+    connection::ConnectionManager,
+    consumer::{Consumer, ConsumerOptions},
+    retry::RetryPolicy,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rabbit = RustRabbit::new(RabbitConfig::default()).await?;
-    
-    // 🔥 ONE LINE - Complete production-ready setup!
-    let options = ConsumerOptions::builder("orders.processing")
-        .minutes_retry()  // ← Auto-declares everything + smart retry!
+    // 1. Connection
+    let config = RabbitConfig::builder()
+        .connection_string("amqp://user:pass@localhost:5672/vhost")
         .build();
+    let connection = ConnectionManager::new(config).await?;
+
+    // 2. Consumer với retry (1 dòng!)
+    let options = ConsumerOptions {
+        auto_ack: false,
+        retry_policy: Some(RetryPolicy::fast()),
+        ..Default::default()
+    };
+
+    // 3. Start consuming
+    let consumer = Consumer::new(connection, options).await?;
     
-    let consumer = rabbit.consumer(options).await?;
-    // ✅ Ready! Queue, exchange, retry logic, dead letter - all configured!
-    
+    consumer.consume("queue_name", |delivery| async move {
+        match your_processing_logic(&delivery.data).await {
+            Ok(_) => delivery.ack(Default::default()).await?,
+            Err(e) if is_retryable(&e) => delivery.nack(Default::default()).await?,
+            Err(_) => delivery.reject(Default::default()).await?,
+        }
+        Ok(())
+    }).await?;
+
     Ok(())
 }
 ```
 
-**What `.minutes_retry()` creates automatically:**
-- ✅ Queue: `orders.processing` (durable, auto-declared)
-- ✅ Exchange: `orders.processing` (direct, bound to queue)
-- ✅ Retry System: `1min → 2min → 4min → 8min → 16min` delays
-- ✅ Dead Letter: `orders.processing.dlx` + `orders.processing.dlq`
-- ✅ Reliability: Manual ACK, prefetch=1, optimal error handling
+**What `RetryPolicy::fast()` creates automatically:**
+- ✅ **5 retries**: 200ms → 300ms → 450ms → 675ms → 1s (capped at 10s)
+- ✅ **Dead Letter Queue**: Automatic DLX/DLQ setup for failed messages
+- ✅ **Backoff + Jitter**: Intelligent delay with randomization
+- ✅ **Production Ready**: Optimal settings for most use cases
 
 ## 📦 **Installation**
 
@@ -46,8 +65,36 @@ serde = { version = "1.0", features = ["derive"] }
 
 ## 💡 **Core Features**
 
-### 🎯 **Smart Automation** *(NEW in v0.3.0)*
-- **Auto-Declare**: Queues, exchanges, and bindings created automatically
+### 🎯 **Smart Automation**
+- **One-Line Setup**: `RetryPolicy::fast()` configures everything
+- **Auto Infrastructure**: Queues, exchanges, and bindings created automatically  
+- **Intelligent Defaults**: Production-ready settings without configuration
+- **Dead Letter Automation**: Automatic failure recovery and monitoring
+
+### 🔄 **Advanced Retry System**
+- **Multiple Presets**: Fast, slow, linear, and custom patterns
+- **Exponential Backoff**: Smart delay calculations with jitter
+- **Delayed Message Exchange**: RabbitMQ x-delayed-message integration
+- **Dead Letter Integration**: Seamless failure handling
+
+### 🏗️ **Enterprise Messaging Patterns**
+- **Request-Response**: RPC-style messaging with correlation IDs and timeouts
+- **Saga Pattern**: Distributed transaction coordination with compensation actions
+- **Event Sourcing**: CQRS implementation with event store and aggregate management
+- **Message Deduplication**: Multiple strategies for duplicate message detection
+- **Priority Queues**: Configurable priority-based message processing
+
+### 🔍 **Production Observability**
+- **Prometheus Metrics**: Comprehensive metrics for throughput, latency, errors
+- **Health Monitoring**: Real-time connection health with auto-recovery
+- **Circuit Breaker**: Automatic failure detection and graceful degradation
+- **Structured Logging**: Distributed tracing with correlation IDs
+
+### 🛡️ **Reliability & Performance**
+- **Connection Pooling**: Automatic connection management with health monitoring
+- **Graceful Shutdown**: Multi-phase shutdown with signal handling
+- **Error Recovery**: Comprehensive error handling with recovery strategies
+- **Type Safety**: Strongly typed message handling with serde integration
 - **Minutes Retry Preset**: One-line setup for business-critical operations
 - **Intelligent Defaults**: Production-ready settings out of the box
 - **Dead Letter Handling**: Automatic failure recovery and monitoring
@@ -85,70 +132,117 @@ RetryPolicy::builder()
 
 ## 📋 **Usage Examples**
 
-### **Complete Consumer Setup**
+## ⚡ **Retry Patterns & Setup**
+
+### **Quick Retry Presets**
+
+| Preset | Retries | Initial Delay | Max Delay | Backoff | Use Case |
+|--------|---------|---------------|-----------|---------|----------|
+| `RetryPolicy::fast()` | 5 | 200ms | 10s | 1.5x | API calls, DB queries |
+| `RetryPolicy::slow()` | 3 | 1s | 1min | 2.0x | Heavy processing |
+| `RetryPolicy::linear(500ms, 3)` | 3 | 500ms | 500ms | 1.0x | Fixed intervals |
+
+### **Consumer Setup Patterns**
 
 ```rust
-use rust_rabbit::{RustRabbit, RabbitConfig, consumer::*};
-use serde::{Serialize, Deserialize};
-use async_trait::async_trait;
-use std::sync::Arc;
+// 🔥 SIÊU NHANH - Copy/paste setup:
+let config = RabbitConfig::builder()
+    .connection_string("amqp://user:pass@localhost:5672/vhost")
+    .build();
+let connection = ConnectionManager::new(config).await?;
+let options = ConsumerOptions {
+    auto_ack: false,
+    retry_policy: Some(RetryPolicy::fast()),
+    prefetch_count: Some(10),
+    ..Default::default()
+};
+let consumer = Consumer::new(connection, options).await?;
 
-#[derive(Serialize, Deserialize)]
-struct OrderMessage {
-    order_id: String,
-    customer_id: String,
-    amount: f64,
-    retry_action: String, // "succeed", "retry_few_times", "fail_permanently"
-}
+// ⚡ Custom với builder
+let retry = RetryPolicy::builder()
+    .fast_preset()          // Dùng preset làm base
+    .max_retries(3)         // Override số lần retry
+    .build();
 
-struct OrderHandler;
+// 🛠 Ultra custom
+let retry = RetryPolicy::builder()
+    .max_retries(5)
+    .initial_delay(Duration::from_millis(100))
+    .backoff_multiplier(2.0)
+    .jitter(0.1)
+    .dead_letter_exchange("my.dlx")
+    .build();
+```
 
-#[async_trait]
-impl MessageHandler<OrderMessage> for OrderHandler {
-    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
-        println!("Processing order {} (attempt: {})", 
-                message.order_id, context.retry_count + 1);
-        
-        match message.retry_action.as_str() {
-            "succeed" => {
-                println!("✅ Order {} processed successfully", message.order_id);
-                MessageResult::Ack
-            }
-            "retry_few_times" => {
-                if context.retry_count < 2 {
-                    println!("⚠️ Order {} failed, will retry", message.order_id);
-                    MessageResult::Retry
-                } else {
-                    println!("✅ Order {} succeeded after retries", message.order_id);
-                    MessageResult::Ack
-                }
-            }
-            "fail_permanently" => {
-                println!("❌ Order {} failed permanently", message.order_id);
-                MessageResult::Reject // Goes to dead letter after retries
-            }
-            _ => MessageResult::Ack,
+### **Message Handling Pattern**
+
+```rust
+consumer.consume("queue_name", |delivery| async move {
+    match process_message(&delivery.data).await {
+        Ok(_) => {
+            // ✅ Success -> ACK
+            delivery.ack(Default::default()).await?;
+        }
+        Err(e) if should_retry(&e) => {
+            // ⚠️ Retryable error -> NACK (will retry)
+            delivery.nack(Default::default()).await?;
+        }
+        Err(_) => {
+            // ❌ Fatal error -> REJECT (send to DLQ)
+            delivery.reject(Default::default()).await?;
         }
     }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rabbit = RustRabbit::new(RabbitConfig::default()).await?;
-    
-    // 🔥 ONE LINE - Complete production setup!
-    let options = ConsumerOptions::builder("orders.processing")
-        .minutes_retry()  // Configures everything automatically
-        .build();
-    
-    let consumer = rabbit.consumer(options).await?;
-    let handler = Arc::new(OrderHandler);
-    
-    // Start processing messages
-    consumer.consume(handler).await?;
-    
     Ok(())
+}).await?;
+
+fn should_retry(error: &MyError) -> bool {
+    match error {
+        MyError::NetworkTimeout => true,     // Retry
+        MyError::ApiRateLimit => true,       // Retry
+        MyError::TempUnavailable => true,    // Retry
+        MyError::InvalidData => false,       // Don't retry
+        MyError::Unauthorized => false,      // Don't retry
+    }
 }
+```
+
+## 🐛 **Prefetch Count Debugging**
+
+**Common Issue**: `prefetch_count` không hoạt động?
+
+### ❌ **Sai** (prefetch_count bị ignore):
+```rust
+ConsumerOptions {
+    auto_ack: true,         // ← Sai! Messages được ACK ngay lập tức
+    prefetch_count: Some(5), // → Không có tác dụng
+    ..Default::default()
+}
+```
+
+### ✅ **Đúng** (prefetch_count hoạt động):
+```rust
+ConsumerOptions {
+    auto_ack: false,        // ← Đúng! Messages phải ACK thủ công
+    prefetch_count: Some(5), // → Giới hạn 5 messages chưa ACK
+    ..Default::default()
+}
+```
+
+**Tại sao?** 
+- `prefetch_count` chỉ hoạt động khi có messages "chưa được ACK"
+- `auto_ack: true` → Messages được ACK ngay → Không có backpressure
+- `auto_ack: false` → Messages đợi manual ACK → QoS limits work
+
+### **Debug Commands**
+```bash
+# Compile check
+cargo check
+
+# Run với RabbitMQ
+cargo run --example fast_consumer_template
+
+# Test prefetch behavior
+cargo run --example prefetch_verification
 ```
 
 ### **Smart Publisher with Auto-Declare**
@@ -301,9 +395,203 @@ match health_checker.check_health().await {
 }
 ```
 
-### **Prometheus Metrics**
+use rust_rabbit::metrics::PrometheusMetrics;
+
+let metrics = PrometheusMetrics::new();
+
+// Metrics are automatically collected:
+// - rust_rabbit_messages_published_total
+// - rust_rabbit_messages_consumed_total  
+// - rust_rabbit_message_processing_duration_seconds
+// - rust_rabbit_connection_health
+// - rust_rabbit_queue_depth
+
+// Expose metrics endpoint
+warp::serve(metrics.metrics_handler())
+    .run(([0, 0, 0, 0], 9090))
+    .await;
+```
+
+## 📁 **Examples**
+
+The library includes comprehensive examples for all features:
+
+### **Core Examples**
+- **`consumer_example.rs`** - Basic consumer setup and message handling
+- **`publisher_example.rs`** - Publishing messages with different options
+- **`fast_consumer_template.rs`** - Production-ready consumer template
+
+### **Retry & Error Handling**
+- **`quick_retry_consumer.rs`** - All retry preset demonstrations
+- **`retry_example.rs`** - Custom retry logic implementation
+- **`retry_policy_presets.rs`** - Retry policy patterns
+
+### **Advanced Patterns**
+- **`event_sourcing_example.rs`** - CQRS and event sourcing implementation
+- **`saga_example.rs`** - Distributed transaction coordination
+- **`phase2_patterns_example.rs`** - Enterprise messaging patterns
+
+### **Production Features**
+- **`health_monitoring_example.rs`** - Health checks and monitoring
+- **`metrics_example.rs`** - Prometheus metrics integration
+- **`comprehensive_demo.rs`** - Full-featured production example
+
+### **Integration**
+- **`actix_web_api_example.rs`** - Web API integration
+- **`builder_pattern_example.rs`** - Configuration patterns
+
+Run any example:
+```bash
+cargo run --example consumer_example
+cargo run --example fast_consumer_template
+```
+
+## 🧪 **Testing**
+
+### **Integration Testing with Docker**
+
+RustRabbit supports real RabbitMQ integration testing:
+
+```bash
+# Start RabbitMQ with required plugins
+docker-compose -f docker-compose.test.yml up -d
+
+# Run integration tests  
+cargo test --test integration_example -- --test-threads=1
+
+# Or use make
+make test-integration
+```
+
+### **Unit Tests**
+```bash
+# Run unit tests
+cargo test
+
+# Run with coverage
+cargo test --all-features
+
+# Test specific modules
+cargo test consumer::tests
+cargo test retry::tests
+```
+
+## 🚨 **Common Mistakes & Best Practices**
+
+### ❌ **Common Mistakes**
+
+1. **Wrong prefetch_count setup**:
+   ```rust
+   auto_ack: true,  // ← Sai! prefetch_count không hoạt động
+   ```
+
+2. **Not handling retry errors**:
+   ```rust
+   // ❌ Không phân biệt retryable vs non-retryable errors
+   Err(_) => delivery.nack(Default::default()).await?,
+   ```
+
+3. **Missing manual ACK**:
+   ```rust
+   // ❌ Quên ACK message
+   // Message sẽ bị stuck ở unACK'd state
+   ```
+
+### ✅ **Best Practices**
+
+1. **Always use auto_ack: false for production**:
+   ```rust
+   ConsumerOptions {
+       auto_ack: false,  // Required for retry và backpressure
+       retry_policy: Some(RetryPolicy::fast()),
+       ..Default::default()
+   }
+   ```
+
+2. **Implement smart retry logic**:
+   ```rust
+   match error {
+       ApiError::Timeout => delivery.nack(Default::default()).await?, // Retry
+       ApiError::Unauthorized => delivery.reject(Default::default()).await?, // DLQ
+   }
+   ```
+
+3. **Set appropriate prefetch_count**:
+   ```rust
+   prefetch_count: Some(cpu_cores * 2), // For I/O bound
+   prefetch_count: Some(cpu_cores),     // For CPU bound
+   prefetch_count: Some(1),             // For memory-heavy tasks
+   ```
+
+4. **Always handle graceful shutdown**:
+   ```rust
+   tokio::select! {
+       _ = consumer.consume("queue", handler) => {}
+       _ = tokio::signal::ctrl_c() => {
+           println!("Shutting down gracefully...");
+       }
+   }
+   ```
+
+## 🔧 **Configuration**
+
+### **Connection Configuration**
 
 ```rust
+let config = RabbitConfig::builder()
+    .connection_string("amqp://user:pass@localhost:5672/vhost")
+    .connection_timeout(Duration::from_secs(30))
+    .heartbeat(Duration::from_secs(10))
+    .retry_config(RetryConfig::default())
+    .health_check_interval(Duration::from_secs(30))
+    .pool_config(PoolConfig::new(5, 10)) // min 5, max 10 connections
+    .build();
+```
+
+### **Consumer Configuration**
+
+```rust
+ConsumerOptions {
+    auto_ack: false,                        // Manual ACK for reliability
+    prefetch_count: Some(10),               // QoS prefetch limit
+    retry_policy: Some(RetryPolicy::fast()), // Retry configuration
+    concurrent_limit: Some(50),             // Max concurrent messages
+    ..Default::default()
+}
+```
+
+## 🚀 **Performance Tips**
+
+- **prefetch_count**: Set to `CPU cores × 2-5` for I/O bound tasks
+- **concurrent_limit**: 50-200 for I/O bound, fewer for CPU bound
+- **Connection pooling**: Use 5-10 connections per application
+- **DLQ monitoring**: Always monitor dead letter queues
+- **Metrics**: Enable Prometheus for production monitoring
+
+## 🤝 **Contributing**
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b my-feature`
+3. Make changes and add tests
+4. Run tests: `cargo test`
+5. Submit a pull request
+
+## 📄 **License**
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🔗 **Links**
+
+- **Documentation**: [docs.rs/rust-rabbit](https://docs.rs/rust-rabbit)
+- **Crates.io**: [crates.io/crates/rust-rabbit](https://crates.io/crates/rust-rabbit)
+- **GitHub**: [github.com/nghiaphamln/rust-rabbit](https://github.com/nghiaphamln/rust-rabbit)
+- **Issues**: [github.com/nghiaphamln/rust-rabbit/issues](https://github.com/nghiaphamln/rust-rabbit/issues)
+
+---
+
+**Made with ❤️ for the Rust community**
 use rust_rabbit::metrics::RustRabbitMetrics;
 
 let metrics = RustRabbitMetrics::new()?;

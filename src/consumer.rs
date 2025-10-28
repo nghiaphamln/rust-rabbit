@@ -357,9 +357,18 @@ impl Consumer {
 
         // Set QoS if prefetch_count is specified
         if let Some(prefetch_count) = options.prefetch_count {
+            debug!("Setting prefetch_count: {}", prefetch_count);
             channel
-                .basic_qos(prefetch_count, lapin::options::BasicQosOptions::default())
-                .await?;
+                .basic_qos(
+                    prefetch_count,
+                    lapin::options::BasicQosOptions { global: false },
+                )
+                .await
+                .map_err(|e| {
+                    error!("Failed to set QoS prefetch_count={}: {}", prefetch_count, e);
+                    RabbitError::Connection(e)
+                })?;
+            debug!("Successfully set prefetch_count: {}", prefetch_count);
         }
 
         // Declare queue if auto_declare is enabled

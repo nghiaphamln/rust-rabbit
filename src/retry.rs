@@ -247,6 +247,12 @@ pub struct RetryPolicyBuilder {
     dead_letter_queue: Option<String>,
 }
 
+impl Default for RetryPolicyBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RetryPolicyBuilder {
     /// Create a new builder with default values
     pub fn new() -> Self {
