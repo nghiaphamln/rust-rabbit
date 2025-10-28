@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use rust_rabbit::{Connection, Consumer, RetryConfig};
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct Order {
     id: u32,
     amount: f64,
@@ -75,17 +75,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection = Connection::new("amqp://localhost:5672").await?;
     
     let consumer = Consumer::builder(connection, "order_queue")
-        .retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
-        .bind_to_exchange("orders")
+        .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
+        .bind_to_exchange("orders", "order.*")
         .concurrency(5)
-        .build()
-        .await?;
+        .build();
     
-    consumer.consume(|order: Order| async move {
-        println!("Processing order {}: ${}", order.id, order.amount);
+    consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+        println!("Processing order {}: ${}", msg.data.id, msg.data.amount);
         
         // Your business logic here
-        if order.amount > 1000.0 {
+        if msg.data.amount > 1000.0 {
             return Err("Amount too high".into()); // Will retry
         }
         
@@ -133,36 +132,78 @@ let no_retry = RetryConfig::no_retry();
 // 3. If max retries exceeded, sent to dead letter queue (e.g., orders.dlq)
 ```
 
-## ⚙️ **Advanced Configuration**
+## ⚙️ **Advanced Features**
+
+### MessageEnvelope System
+
+For advanced retry tracking and error handling, use the MessageEnvelope system:
+
+```rust
+use rust_rabbit::{Connection, Publisher, Consumer, MessageEnvelope, RetryConfig};
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Order {
+    id: u32,
+    amount: f64,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::new("amqp://localhost:5672").await?;
+    
+    // Publisher with envelope
+    let publisher = Publisher::new(connection.clone());
+    let order = Order { id: 123, amount: 99.99 };
+    let envelope = MessageEnvelope::new(order, "order_queue")
+        .with_max_retries(3);
+    
+    publisher.publish_envelope_to_queue("order_queue", &envelope, None).await?;
+    
+    // Consumer with envelope processing
+    let consumer = Consumer::builder(connection, "order_queue")
+        .with_retry(RetryConfig::exponential_default())
+        .build();
+    
+    consumer.consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
+        println!("Processing order {} (attempt {})", 
+                 envelope.payload.id, 
+                 envelope.metadata.retry_attempt + 1);
+        
+        // Access retry metadata
+        if !envelope.is_first_attempt() {
+            println!("This is a retry. Last error: {:?}", envelope.last_error());
+        }
+        
+        Ok(())
+    }).await?;
+    
+    Ok(())
+}
+```
 
 ### Connection Options
 
 ```rust
-use rust_rabbit::{Connection, ConnectionBuilder};
+use rust_rabbit::Connection;
 
 // Simple connection
 let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
-// With custom settings
-let connection = ConnectionBuilder::new("amqp://user:pass@localhost:5672/vhost")
-    .connection_timeout(60)  // 60 seconds
-    .heartbeat(30)          // 30 seconds  
-    .connect()
-    .await?;
+// Different connection URLs
+let local = Connection::new("amqp://localhost:5672").await?;
+let remote = Connection::new("amqp://user:pass@remote-host:5672/vhost").await?;
+let secure = Connection::new("amqps://user:pass@secure-host:5671").await?;
 ```
 
 ### Publisher Options
 
 ```rust
 use rust_rabbit::PublishOptions;
-use std::time::Duration;
 
 let options = PublishOptions::new()
-    .persistent(true)                    // Survive broker restart
-    .priority(5)                         // Message priority (0-255)
-    .ttl(Duration::from_secs(300))      // 5 minutes TTL
-    .header("source", "order-service")   // Custom headers
-    .header("version", "1.0");
+    .mandatory()                         // Make delivery mandatory
+    .priority(5);                        // Message priority (0-255)
 
 publisher.publish_to_queue("orders", &message, Some(options)).await?;
 ```
@@ -171,13 +212,10 @@ publisher.publish_to_queue("orders", &message, Some(options)).await?;
 
 ```rust
 let consumer = Consumer::builder(connection, "order_queue")
-    .retry(RetryConfig::exponential_default())
-    .bind_to_exchange("order_exchange")  // Optional exchange binding
-    .routing_key("new.order")            // Custom routing key
+    .with_retry(RetryConfig::exponential_default())
+    .bind_to_exchange("order_exchange", "new.order")  // Exchange binding with routing key
     .concurrency(10)                     // Process 10 messages in parallel
-    .manual_declare()                    // Skip auto-queue creation
-    .build()
-    .await?;
+    .build();
 ```
 
 ## 📚 **Documentation**
@@ -237,10 +275,9 @@ let consumer = Consumer::new(connection_manager, ConsumerOptions {
 
 // NEW (v1.0) - Simple  
 let consumer = Consumer::builder(connection, "queue")
-    .retry(RetryConfig::exponential_default())
+    .with_retry(RetryConfig::exponential_default())
     .concurrency(10)
-    .build()
-    .await?;
+    .build();
 ```
 
 **Major Changes:**

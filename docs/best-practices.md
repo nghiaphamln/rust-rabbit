@@ -55,13 +55,12 @@ async fn order_service_example() -> Result<(), Box<dyn std::error::Error>> {
     
     // Listen for commands
     let consumer = Consumer::builder(bus.connection.clone(), "order.commands")
-        .retry(RetryConfig::exponential_default())
+        .with_retry(RetryConfig::exponential_default())
         .concurrency(10)
-        .build()
-        .await?;
+        .build();
     
-    consumer.consume(|command: OrderCommand| async move {
-        match command {
+    consumer.consume(|msg: rust_rabbit::Message<OrderCommand>| async move {
+        match msg.data {
             OrderCommand::Create(order) => {
                 let result = create_order(order).await?;
                 
@@ -71,7 +70,7 @@ async fn order_service_example() -> Result<(), Box<dyn std::error::Error>> {
             }
             OrderCommand::Cancel(order_id) => {
                 cancel_order(order_id).await?;
-                bus.publish_event("order.cancelled", &order_id).await?;
+                bus.publish_event("order.cancelled", &msg.data_id).await?;
                 Ok(())
             }
         }
@@ -122,13 +121,12 @@ async fn setup_event_handlers(connection: Arc<Connection>) -> Result<(), Box<dyn
     let email_consumer = Consumer::builder(connection.clone(), "email.service")
         .bind_to_exchange("domain.events")
         .routing_key("user.*")
-        .retry(RetryConfig::linear(3, Duration::from_secs(30)))
-        .build()
-        .await?;
+        .with_retry(RetryConfig::linear(3, Duration::from_secs(30)))
+        .build();
     
     tokio::spawn(async move {
-        email_consumer.consume(|event: DomainEvent| async move {
-            match event {
+        email_consumer.consume(|msg: rust_rabbit::Message<DomainEvent>| async move {
+            match msg.data {
                 DomainEvent::UserRegistered { email, .. } => {
                     send_welcome_email(&email).await?;
                     Ok(())
@@ -142,14 +140,13 @@ async fn setup_event_handlers(connection: Arc<Connection>) -> Result<(), Box<dyn
     let analytics_consumer = Consumer::builder(connection.clone(), "analytics.service")
         .bind_to_exchange("domain.events")
         .routing_key("#") // All events
-        .retry(RetryConfig::exponential_default())
+        .with_retry(RetryConfig::exponential_default())
         .concurrency(20)
-        .build()
-        .await?;
+        .build();
     
     tokio::spawn(async move {
-        analytics_consumer.consume(|event: DomainEvent| async move {
-            store_event_for_analytics(&event).await?;
+        analytics_consumer.consume(|msg: rust_rabbit::Message<DomainEvent>| async move {
+            store_event_for_analytics(&msg.data).await?;
             Ok(())
         }).await
     });
@@ -284,7 +281,7 @@ impl HighThroughputConsumer {
     async fn new(connection: Arc<Connection>, queue: &str, concurrency: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let consumer = Consumer::builder(connection, queue)
             .concurrency(concurrency)
-            .retry(RetryConfig::exponential(3, Duration::from_millis(100), Duration::from_secs(10)))
+            .with_retry(RetryConfig::exponential(3, Duration::from_millis(100), Duration::from_secs(10)))
             .build()
             .await?;
         
@@ -418,14 +415,14 @@ impl GracefulService {
         
         // Start consumers with shutdown check
         let consumer = Consumer::builder(self.connection.clone(), "orders")
-            .retry(RetryConfig::exponential_default())
+            .with_retry(RetryConfig::exponential_default())
             .build()
             .await?;
         
         let running_clone = self.running.clone();
         
         tokio::select! {
-            result = consumer.consume(|message: OrderMessage| async move {
+            result = consumer.consume(|msg: rust_rabbit::Message<OrderMessage>| async move {
                 // Check shutdown flag before processing
                 if !running_clone.load(Ordering::SeqCst) {
                     log::info!("Shutdown in progress, skipping message processing");
@@ -690,7 +687,7 @@ mod integration_tests {
         
         let mut received = false;
         let timeout = tokio::time::timeout(Duration::from_secs(5), async {
-            consumer.consume(|msg: TestMessage| async move {
+            consumer.consume(|msg: rust_rabbit::Message<TestMessage>| async move {
                 assert_eq!(msg.id, 1);
                 assert_eq!(msg.content, "test");
                 received = true;
