@@ -1,0 +1,28 @@
+# Clippy configuration for rust-rabbit
+
+# Allow these lints that are common in this codebase
+allow = [
+    "missing_errors_doc",      # We'll add error docs gradually
+    "missing_panics_doc",      # Most functions don't panic
+    "module_name_repetitions", # Sometimes needed for clarity
+]
+
+# Warn on these lints
+warn = [
+    "pedantic",
+    "nursery",
+    "cargo",
+]
+
+# Deny these critical lints
+deny = [
+    "unsafe_code",
+    "unreachable_pub",
+    "unused_qualifications",
+]
+
+# Configuration for specific lints
+doc-valid-idents = ["RabbitMQ", "AMQP", "TCP", "TLS", "JSON"]
+cognitive-complexity-threshold = 30
+type-complexity-threshold = 250
+trivial-copy-size-limit = 64

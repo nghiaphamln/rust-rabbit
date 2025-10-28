@@ -1,184 +1,167 @@
+//! Simplified Error Handling for rust-rabbit
+//! 
+//! Basic error types for core RabbitMQ operations without complex pattern-specific errors.
+
 use thiserror::Error;
 
-/// Main error type for the rust-rabbit library
-#[derive(Error, Debug)]
-pub enum RabbitError {
-    #[error("Connection error: {0}")]
-    Connection(#[from] lapin::Error),
-
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
-
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
-
-    #[error("Configuration error: {0}")]
-    Configuration(String),
-
-    #[error("Channel error: {0}")]
-    ChannelError(String),
-
-    #[error("Consumer error: {0}")]
-    Consumer(String),
-
-    #[error("Publisher error: {0}")]
-    Publisher(String),
-
-    #[error("Retry exhausted: {0}")]
-    RetryExhausted(String),
-
-    #[error("Health check failed: {0}")]
-    HealthCheck(String),
-
-    #[error("Timeout error: {0}")]
-    Timeout(String),
-
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("Generic error: {0}")]
-    Generic(#[from] anyhow::Error),
-}
-
-/// Extended error type for advanced patterns (Phase 2)
+/// Main error type for rust-rabbit library
 #[derive(Error, Debug)]
 pub enum RustRabbitError {
-    // Core errors
-    #[error("Rabbit error: {0}")]
-    Rabbit(#[from] RabbitError),
-
-    // Request-Response pattern errors
-    #[error("Request timeout")]
-    RequestTimeout,
-
-    #[error("Response channel closed")]
-    ResponseChannelClosed,
-
-    // Saga pattern errors
-    #[error("Saga not found")]
-    SagaNotFound,
-
-    #[error("Saga executor not found for action type: {0}")]
-    SagaExecutorNotFound(String),
-
-    #[error("Saga compensation failed")]
-    SagaCompensationFailed,
-
-    // Event sourcing errors
-    #[error("Event sequence error - events must be in order")]
-    EventSequenceError,
-
-    #[error("Unknown event type: {0}")]
-    UnknownEventType(String),
-
-    #[error("Aggregate not found")]
-    AggregateNotFound,
-
-    #[error("Snapshot creation failed")]
-    SnapshotCreationFailed,
-
-    // Priority queue errors
-    #[error("Queue is full")]
-    QueueFull,
-
-    #[error("Queue not found: {0}")]
-    QueueNotFound(String),
-
-    #[error("Invalid priority value: {0}")]
-    InvalidPriority(u8),
-
-    // Deduplication errors
-    #[error("Duplicate message detected")]
-    DuplicateMessage,
-
-    #[error("Deduplication store error: {0}")]
-    DeduplicationStore(String),
-
-    // General async errors
-    #[error("Channel send error")]
-    ChannelSendError,
-
-    #[error("Task join error: {0}")]
-    TaskJoinError(String),
-
-    #[error("Lock poisoned")]
-    LockPoisoned,
+    #[error("Connection error: {0}")]
+    Connection(String),
+    
+    #[error("RabbitMQ protocol error: {0}")]
+    Protocol(#[from] lapin::Error),
+    
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+    
+    #[error("Configuration error: {0}")]
+    Configuration(String),
+    
+    #[error("Consumer error: {0}")]
+    Consumer(String),
+    
+    #[error("Publisher error: {0}")]
+    Publisher(String),
+    
+    #[error("Retry error: {0}")]
+    Retry(String),
+    
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
-/// Processing error types for consumer handlers
-#[derive(Error, Debug, Clone)]
-pub enum ProcessingError {
-    /// Retryable error - message should be retried with delay
-    #[error("Retryable error: {message}")]
-    Retryable {
-        message: String,
-        /// Optional custom retry delay override
-        custom_delay: Option<std::time::Duration>,
-    },
+/// Result type alias for convenience
+pub type Result<T> = std::result::Result<T, RustRabbitError>;
 
-    /// Non-retryable error - message should be rejected permanently
-    #[error("Non-retryable error: {message}")]
-    NonRetryable {
-        message: String,
-        /// Whether to send to dead letter queue (default: true)
-        send_to_dlq: bool,
-    },
-}
-
-impl ProcessingError {
-    /// Create a retryable error with default delay
-    pub fn retryable<S: Into<String>>(message: S) -> Self {
-        Self::Retryable {
-            message: message.into(),
-            custom_delay: None,
-        }
-    }
-
-    /// Create a retryable error with custom delay
-    pub fn retryable_with_delay<S: Into<String>>(message: S, delay: std::time::Duration) -> Self {
-        Self::Retryable {
-            message: message.into(),
-            custom_delay: Some(delay),
-        }
-    }
-
-    /// Create a non-retryable error (will be sent to DLQ)
-    pub fn non_retryable<S: Into<String>>(message: S) -> Self {
-        Self::NonRetryable {
-            message: message.into(),
-            send_to_dlq: true,
-        }
-    }
-
-    /// Create a non-retryable error that should be discarded (not sent to DLQ)
-    pub fn discard<S: Into<String>>(message: S) -> Self {
-        Self::NonRetryable {
-            message: message.into(),
-            send_to_dlq: false,
-        }
-    }
-
-    /// Check if this error is retryable
+impl RustRabbitError {
+    /// Check if the error is retryable
     pub fn is_retryable(&self) -> bool {
-        matches!(self, ProcessingError::Retryable { .. })
-    }
-
-    /// Check if this error should be sent to DLQ
-    pub fn should_send_to_dlq(&self) -> bool {
         match self {
-            ProcessingError::Retryable { .. } => false,
-            ProcessingError::NonRetryable { send_to_dlq, .. } => *send_to_dlq,
+            // Connection errors are usually retryable
+            RustRabbitError::Connection(_) => true,
+            RustRabbitError::Protocol(lapin_error) => {
+                // Check if it's a temporary protocol error
+                matches!(
+                    lapin_error,
+                    lapin::Error::IOError(_) | lapin::Error::ProtocolError(_)
+                )
+            }
+            // Serialization and configuration errors are not retryable
+            RustRabbitError::Serialization(_) => false,
+            RustRabbitError::Configuration(_) => false,
+            // Consumer/Publisher errors might be retryable depending on context
+            RustRabbitError::Consumer(_) => true,
+            RustRabbitError::Publisher(_) => true,
+            // Retry errors are not retryable (to avoid infinite loops)
+            RustRabbitError::Retry(_) => false,
+            // IO errors might be retryable
+            RustRabbitError::Io(_) => true,
         }
     }
-
-    /// Get custom delay if specified
-    pub fn custom_delay(&self) -> Option<std::time::Duration> {
+    
+    /// Check if the error indicates a connection issue
+    pub fn is_connection_error(&self) -> bool {
+        matches!(
+            self,
+            RustRabbitError::Connection(_) | RustRabbitError::Protocol(_) | RustRabbitError::Io(_)
+        )
+    }
+    
+    /// Get a user-friendly error message
+    pub fn user_message(&self) -> String {
         match self {
-            ProcessingError::Retryable { custom_delay, .. } => *custom_delay,
-            ProcessingError::NonRetryable { .. } => None,
+            RustRabbitError::Connection(_) => {
+                "Failed to connect to RabbitMQ. Please check your connection settings.".to_string()
+            }
+            RustRabbitError::Protocol(_) => {
+                "RabbitMQ protocol error. The connection might be unstable.".to_string()
+            }
+            RustRabbitError::Serialization(_) => {
+                "Failed to serialize/deserialize message. Please check your message format.".to_string()
+            }
+            RustRabbitError::Configuration(_) => {
+                "Configuration error. Please check your settings.".to_string()
+            }
+            RustRabbitError::Consumer(_) => {
+                "Consumer error. Failed to process message.".to_string()
+            }
+            RustRabbitError::Publisher(_) => {
+                "Publisher error. Failed to send message.".to_string()
+            }
+            RustRabbitError::Retry(_) => {
+                "Retry mechanism failed. Message processing could not be completed.".to_string()
+            }
+            RustRabbitError::Io(_) => {
+                "IO error occurred. This might be a temporary issue.".to_string()
+            }
         }
     }
 }
 
-/// Result type alias for the rust-rabbit library
-pub type Result<T> = std::result::Result<T, RabbitError>;
+/// Convert serde_json errors to RustRabbitError
+impl From<serde_json::Error> for RustRabbitError {
+    fn from(err: serde_json::Error) -> Self {
+        RustRabbitError::Serialization(err.to_string())
+    }
+}
+
+/// Convert URL parsing errors to RustRabbitError
+impl From<url::ParseError> for RustRabbitError {
+    fn from(err: url::ParseError) -> Self {
+        RustRabbitError::Configuration(format!("Invalid URL: {}", err))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_error_retryable() {
+        let conn_error = RustRabbitError::Connection("test".to_string());
+        assert!(conn_error.is_retryable());
+        
+        let serialization_error = RustRabbitError::Serialization("test".to_string());
+        assert!(!serialization_error.is_retryable());
+        
+        let config_error = RustRabbitError::Configuration("test".to_string());
+        assert!(!config_error.is_retryable());
+        
+        let retry_error = RustRabbitError::Retry("test".to_string());
+        assert!(!retry_error.is_retryable());
+    }
+    
+    #[test]
+    fn test_connection_error_detection() {
+        let conn_error = RustRabbitError::Connection("test".to_string());
+        assert!(conn_error.is_connection_error());
+        
+        let serialization_error = RustRabbitError::Serialization("test".to_string());
+        assert!(!serialization_error.is_connection_error());
+    }
+    
+    #[test]
+    fn test_user_messages() {
+        let errors = vec![
+            RustRabbitError::Connection("test".to_string()),
+            RustRabbitError::Serialization("test".to_string()),
+            RustRabbitError::Configuration("test".to_string()),
+        ];
+        
+        for error in errors {
+            let message = error.user_message();
+            assert!(!message.is_empty());
+            assert!(!message.contains("test")); // User message should not contain internal details
+        }
+    }
+    
+    #[test]
+    fn test_from_serde_json_error() {
+        let json_error = serde_json::from_str::<i32>("invalid json").unwrap_err();
+        let rabbit_error = RustRabbitError::from(json_error);
+        
+        matches!(rabbit_error, RustRabbitError::Serialization(_));
+    }
+}
