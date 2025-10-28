@@ -206,7 +206,281 @@ fn should_retry(error: &MyError) -> bool {
 }
 ```
 
-## 🐛 **Prefetch Count Debugging**
+## � **Consumer Retry Configuration & Message Handling**
+
+### **📋 Consumer Setup với Retry Policy**
+
+```rust
+use rust_rabbit::{
+    consumer::{Consumer, ConsumerOptions, MessageHandler, MessageResult, MessageContext},
+    retry::RetryPolicy,
+    connection::ConnectionManager,
+    config::RabbitConfig,
+};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+// 1. Define your message type
+#[derive(Debug, Deserialize, Serialize)]
+struct OrderMessage {
+    order_id: String,
+    customer_id: String,
+    total: f64,
+}
+
+// 2. Create your message handler
+struct OrderHandler;
+
+#[async_trait]
+impl MessageHandler<OrderMessage> for OrderHandler {
+    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
+        info!("Processing order: {}", message.order_id);
+        
+        match process_order(&message).await {
+            Ok(_) => {
+                info!("✅ Order {} processed successfully", message.order_id);
+                MessageResult::Ack  // Success -> Acknowledge message
+            }
+            Err(e) => {
+                match classify_error(&e) {
+                    ErrorType::Retryable => {
+                        warn!("⚠️ Retryable error for order {}: {}", message.order_id, e);
+                        MessageResult::Retry  // Will trigger retry mechanism
+                    }
+                    ErrorType::Fatal => {
+                        error!("❌ Fatal error for order {}: {}", message.order_id, e);
+                        MessageResult::Reject  // Send to dead letter queue
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 3. Setup consumer with retry policy
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RabbitConfig::builder()
+        .connection_string("amqp://admin:password@localhost:5672/")
+        .build();
+    
+    let connection_manager = ConnectionManager::new(config).await?;
+    
+    // Configure retry policy
+    let retry_policy = RetryPolicy::builder()
+        .max_retries(3)                              // Max 3 retry attempts
+        .initial_delay(Duration::from_millis(500))   // Start with 500ms delay
+        .max_delay(Duration::from_secs(30))          // Cap at 30 seconds
+        .backoff_multiplier(2.0)                     // Double delay each retry
+        .jitter(0.1)                                 // Add 10% randomization
+        .dead_letter_exchange("orders.dlx".to_string())  // Failed messages go here
+        .dead_letter_queue("orders.dlq".to_string())     // Dead letter queue
+        .build();
+    
+    // Setup consumer with retry configuration
+    let consumer_options = ConsumerOptions::builder("orders.processing")
+        .auto_declare_queue()        // Create queue if not exists
+        .auto_declare_exchange()     // Create exchange if not exists  
+        .retry_policy(retry_policy)  // Enable retry mechanism
+        .prefetch_count(10)          // Process up to 10 messages concurrently
+        .build();
+    
+    let consumer = Consumer::new(connection_manager, consumer_options).await?;
+    let handler = std::sync::Arc::new(OrderHandler);
+    
+    // Start consuming with retry support
+    consumer.consume(handler).await?;
+    
+    Ok(())
+}
+```
+
+### **🎯 MessageResult Types - Action Guide**
+
+| MessageResult | Action | Description | Use Case |
+|---------------|--------|-------------|----------|
+| `MessageResult::Ack` | ✅ **Acknowledge** | Message processed successfully | Successful processing |
+| `MessageResult::Retry` | 🔄 **Retry** | Retry message with delay | Temporary failures (network, rate limits) |
+| `MessageResult::Reject` | ❌ **Dead Letter** | Send to DLQ, don't retry | Permanent failures (invalid data) |
+| `MessageResult::Requeue` | 🔃 **Requeue** | Put back in queue immediately | Temporary resource unavailable |
+
+### **⚠️ Error Classification Strategy**
+
+```rust
+#[derive(Debug)]
+enum ErrorType {
+    Retryable,  // Can retry
+    Fatal,      // Don't retry
+}
+
+fn classify_error(error: &ProcessingError) -> ErrorType {
+    match error {
+        // 🔄 RETRYABLE - Temporary issues
+        ProcessingError::NetworkTimeout => ErrorType::Retryable,
+        ProcessingError::ApiRateLimit => ErrorType::Retryable,
+        ProcessingError::DatabaseConnectionLost => ErrorType::Retryable,
+        ProcessingError::TemporaryUnavailable => ErrorType::Retryable,
+        ProcessingError::ConcurrencyLimit => ErrorType::Retryable,
+        
+        // ❌ FATAL - Permanent issues
+        ProcessingError::InvalidData => ErrorType::Fatal,
+        ProcessingError::AuthenticationFailed => ErrorType::Fatal,
+        ProcessingError::PermissionDenied => ErrorType::Fatal,
+        ProcessingError::RecordNotFound => ErrorType::Fatal,
+        ProcessingError::ValidationFailed(_) => ErrorType::Fatal,
+    }
+}
+
+async fn process_order(message: &OrderMessage) -> Result<(), ProcessingError> {
+    // Your business logic here
+    validate_order(message)?;      // Can throw ValidationFailed (Fatal)
+    call_payment_api(message).await?;  // Can throw NetworkTimeout (Retryable)  
+    update_inventory(message).await?;  // Can throw DatabaseConnectionLost (Retryable)
+    send_confirmation(message).await?; // Can throw ApiRateLimit (Retryable)
+    
+    Ok(())
+}
+```
+
+### **🛠️ Advanced Handler Patterns**
+
+#### **Pattern 1: Conditional Retry với Context**
+```rust
+#[async_trait]
+impl MessageHandler<OrderMessage> for OrderHandler {
+    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
+        // Check retry count from context
+        let retry_count = context.headers
+            .get("x-retry-count")
+            .and_then(|v| v.as_long_int())
+            .unwrap_or(0);
+            
+        if retry_count >= 2 {
+            warn!("Order {} failed after {} retries, sending to manual review", 
+                  message.order_id, retry_count);
+            return MessageResult::Reject;  // Send to DLQ for manual review
+        }
+        
+        match process_order(&message).await {
+            Ok(_) => MessageResult::Ack,
+            Err(e) if is_worth_retrying(&e, retry_count) => MessageResult::Retry,
+            Err(_) => MessageResult::Reject,
+        }
+    }
+}
+```
+
+#### **Pattern 2: Circuit Breaker với Handler**
+```rust
+use std::sync::atomic::{AtomicU32, Ordering};
+
+struct OrderHandlerWithCircuitBreaker {
+    failure_count: AtomicU32,
+    circuit_open: AtomicBool,
+}
+
+#[async_trait]
+impl MessageHandler<OrderMessage> for OrderHandlerWithCircuitBreaker {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        // Check circuit breaker
+        if self.circuit_open.load(Ordering::Relaxed) {
+            warn!("Circuit breaker open, rejecting message");
+            return MessageResult::Requeue;  // Try again later
+        }
+        
+        match process_order(&message).await {
+            Ok(_) => {
+                self.failure_count.store(0, Ordering::Relaxed);  // Reset on success
+                MessageResult::Ack
+            }
+            Err(e) => {
+                let failures = self.failure_count.fetch_add(1, Ordering::Relaxed);
+                if failures >= 5 {
+                    self.circuit_open.store(true, Ordering::Relaxed);
+                    warn!("Circuit breaker triggered after {} failures", failures);
+                }
+                
+                if is_retryable(&e) {
+                    MessageResult::Retry
+                } else {
+                    MessageResult::Reject
+                }
+            }
+        }
+    }
+}
+```
+
+### **📊 Retry Policy Examples by Use Case**
+
+#### **Fast API Calls** (Network hiccups)
+```rust
+let api_retry = RetryPolicy::builder()
+    .max_retries(5)
+    .initial_delay(Duration::from_millis(100))
+    .max_delay(Duration::from_secs(5))
+    .backoff_multiplier(1.5)
+    .jitter(0.2)
+    .build();
+```
+
+#### **Database Operations** (Connection issues)
+```rust
+let db_retry = RetryPolicy::builder()
+    .max_retries(3)
+    .initial_delay(Duration::from_millis(500))
+    .max_delay(Duration::from_secs(30))
+    .backoff_multiplier(2.0)
+    .jitter(0.1)
+    .build();
+```
+
+#### **Business Critical** (Financial transactions)
+```rust
+let critical_retry = RetryPolicy::builder()
+    .max_retries(3)
+    .initial_delay(Duration::from_secs(30))   // Wait longer initially
+    .max_delay(Duration::from_secs(300))      // Max 5 minutes
+    .backoff_multiplier(1.2)                  // Gentle backoff
+    .jitter(0.0)                              // No randomization for predictability
+    .dead_letter_exchange("financial.dlx".to_string())
+    .dead_letter_queue("financial.manual.review".to_string())
+    .build();
+```
+
+### **🔍 Debugging Tips**
+
+#### **Log Retry Information**
+```rust
+#[async_trait]
+impl MessageHandler<OrderMessage> for OrderHandler {
+    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
+        let retry_count = context.get_retry_count();
+        let original_timestamp = context.get_original_timestamp();
+        
+        info!("Processing order {} (retry: {}, age: {:?})", 
+              message.order_id, retry_count, 
+              Utc::now() - original_timestamp);
+        
+        // Your processing logic...
+        MessageResult::Ack
+    }
+}
+```
+
+#### **Monitor Retry Queue**
+```bash
+# Check retry exchange bindings
+sudo rabbitmqctl list_bindings | grep retry
+
+# Monitor message flow
+sudo rabbitmqctl list_queues name messages
+
+# Check dead letter queue
+sudo rabbitmqctl list_queues | grep dlq
+```
+
+## �🐛 **Prefetch Count Debugging**
 
 **Common Issue**: `prefetch_count` không hoạt động?
 
@@ -721,6 +995,273 @@ cargo run --example event_sourcing_example     # Bank account CQRS
 # Comparison examples
 cargo run --example before_vs_after_setup      # Shows complexity reduction
 ```
+
+## ✅ **Retry Best Practices & Common Pitfalls**
+
+### **🚀 Production-Ready Patterns**
+
+#### **1. Idempotent Message Processing**
+```rust
+use std::collections::HashSet;
+
+struct IdempotentOrderHandler {
+    processed_ids: Arc<Mutex<HashSet<String>>>,
+}
+
+#[async_trait]
+impl MessageHandler<OrderMessage> for IdempotentOrderHandler {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        // Check if already processed
+        {
+            let processed = self.processed_ids.lock().await;
+            if processed.contains(&message.order_id) {
+                warn!("Order {} already processed, skipping", message.order_id);
+                return MessageResult::Ack;  // Don't process again
+            }
+        }
+        
+        match process_order(&message).await {
+            Ok(_) => {
+                // Mark as processed
+                self.processed_ids.lock().await.insert(message.order_id.clone());
+                MessageResult::Ack
+            }
+            Err(e) => {
+                if is_retryable(&e) {
+                    MessageResult::Retry
+                } else {
+                    MessageResult::Reject
+                }
+            }
+        }
+    }
+}
+```
+
+#### **2. Graceful Shutdown với Retry**
+```rust
+use tokio::signal;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag_clone = shutdown_flag.clone();
+    
+    // Setup graceful shutdown
+    tokio::spawn(async move {
+        signal::ctrl_c().await.expect("Failed to listen for ctrl+c");
+        info!("Shutdown signal received, finishing current messages...");
+        shutdown_flag_clone.store(true, Ordering::Relaxed);
+    });
+    
+    let handler = GracefulOrderHandler { shutdown_flag };
+    let consumer = Consumer::new(connection_manager, consumer_options).await?;
+    
+    consumer.consume(handler).await?;
+    Ok(())
+}
+
+struct GracefulOrderHandler {
+    shutdown_flag: Arc<AtomicBool>,
+}
+
+#[async_trait]
+impl MessageHandler<OrderMessage> for GracefulOrderHandler {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        // Check shutdown flag
+        if self.shutdown_flag.load(Ordering::Relaxed) {
+            warn!("Shutdown in progress, requeuing message {}", message.order_id);
+            return MessageResult::Requeue;  // Let another instance handle it
+        }
+        
+        // Normal processing
+        match process_order(&message).await {
+            Ok(_) => MessageResult::Ack,
+            Err(e) if is_retryable(&e) => MessageResult::Retry,
+            Err(_) => MessageResult::Reject,
+        }
+    }
+}
+```
+
+### **⚠️ Common Pitfalls to Avoid**
+
+#### **❌ Pitfall 1: Auto-ACK với Retry Policy**
+```rust
+// 🚫 WRONG - Retry won't work!
+let options = ConsumerOptions::builder("orders")
+    .auto_ack(true)           // ← This breaks retry mechanism
+    .retry_policy(retry)      // ← Will be ignored!
+    .build();
+
+// ✅ CORRECT - Manual ACK enables retry
+let options = ConsumerOptions::builder("orders")
+    .auto_ack(false)          // ← Must be false for retry to work
+    .retry_policy(retry)      // ← Now retry works properly
+    .build();
+```
+
+#### **❌ Pitfall 2: Poison Messages với Infinite Retry**
+```rust
+// 🚫 WRONG - Can create poison messages
+#[async_trait]
+impl MessageHandler<OrderMessage> for BadHandler {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        match serde_json::from_str::<OrderMessage>(&message.data) {
+            Ok(order) => process_order(order).await,
+            Err(_) => MessageResult::Retry,  // ← Will retry forever on invalid JSON!
+        }
+    }
+}
+
+// ✅ CORRECT - Classify errors properly
+#[async_trait]
+impl MessageHandler<OrderMessage> for GoodHandler {
+    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
+        let retry_count = context.get_retry_count();
+        
+        match serde_json::from_str::<OrderMessage>(&message.data) {
+            Ok(order) => {
+                match process_order(order).await {
+                    Ok(_) => MessageResult::Ack,
+                    Err(e) if is_retryable(&e) => MessageResult::Retry,
+                    Err(_) => MessageResult::Reject,
+                }
+            }
+            Err(_) => {
+                error!("Invalid JSON format, sending to DLQ");
+                MessageResult::Reject  // ← Don't retry parse errors
+            }
+        }
+    }
+}
+```
+
+#### **❌ Pitfall 3: Blocking Operations in Handler**
+```rust
+// 🚫 WRONG - Blocks event loop
+#[async_trait]
+impl MessageHandler<OrderMessage> for BlockingHandler {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        // This blocks the async runtime!
+        std::thread::sleep(Duration::from_secs(10));
+        MessageResult::Ack
+    }
+}
+
+// ✅ CORRECT - Use async operations
+#[async_trait]  
+impl MessageHandler<OrderMessage> for AsyncHandler {
+    async fn handle(&self, message: OrderMessage, _context: MessageContext) -> MessageResult {
+        // Non-blocking async delay
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        MessageResult::Ack
+    }
+}
+```
+
+#### **❌ Pitfall 4: Missing Dead Letter Queue**
+```rust
+// 🚫 WRONG - Failed messages lost forever
+let retry = RetryPolicy::builder()
+    .max_retries(3)
+    .initial_delay(Duration::from_millis(500))
+    // Missing DLQ configuration!
+    .build();
+
+// ✅ CORRECT - Always configure DLQ
+let retry = RetryPolicy::builder()
+    .max_retries(3)
+    .initial_delay(Duration::from_millis(500))
+    .dead_letter_exchange("orders.dlx".to_string())
+    .dead_letter_queue("orders.dlq".to_string())  // ← Failed messages go here
+    .build();
+```
+
+### **📊 Performance Tuning Tips**
+
+#### **Optimize Prefetch Count**
+```rust
+// High throughput, low latency messages
+let options = ConsumerOptions::builder("fast_queue")
+    .prefetch_count(100)    // Batch more messages
+    .build();
+
+// Heavy processing, reliable delivery
+let options = ConsumerOptions::builder("heavy_queue")
+    .prefetch_count(1)      // Process one at a time
+    .build();
+    
+// Balanced approach
+let options = ConsumerOptions::builder("balanced_queue")
+    .prefetch_count(10)     // Good default for most cases
+    .build();
+```
+
+#### **Monitor Retry Metrics**
+```rust
+use rust_rabbit::metrics::RustRabbitMetrics;
+
+let metrics = RustRabbitMetrics::new();
+
+// Monitor in your handler
+#[async_trait]
+impl MessageHandler<OrderMessage> for MetricsHandler {
+    async fn handle(&self, message: OrderMessage, context: MessageContext) -> MessageResult {
+        let start = Instant::now();
+        let retry_count = context.get_retry_count();
+        
+        // Track retry counts
+        metrics.retry_attempts.with_label_values(&[&retry_count.to_string()]).inc();
+        
+        let result = match process_order(&message).await {
+            Ok(_) => {
+                metrics.messages_processed_success.inc();
+                MessageResult::Ack
+            }
+            Err(e) if is_retryable(&e) => {
+                metrics.messages_retry.inc();
+                MessageResult::Retry
+            }
+            Err(_) => {
+                metrics.messages_dead_letter.inc();
+                MessageResult::Reject
+            }
+        };
+        
+        // Track processing time
+        metrics.processing_duration
+            .observe(start.elapsed().as_secs_f64());
+            
+        result
+    }
+}
+```
+
+### **🔧 Debugging Checklist**
+
+#### **When Retry Doesn't Work:**
+1. ✅ Check `auto_ack: false` in ConsumerOptions
+2. ✅ Verify retry policy is configured
+3. ✅ Ensure handler returns `MessageResult::Retry`
+4. ✅ Check RabbitMQ has x-delayed-message plugin
+5. ✅ Verify exchange bindings exist
+
+#### **When Messages Disappear:**
+1. ✅ Check dead letter exchange/queue configuration
+2. ✅ Monitor DLQ for rejected messages
+3. ✅ Verify queue declarations (durable, auto-delete)
+4. ✅ Check network connectivity
+5. ✅ Review consumer exceptions
+
+#### **Performance Issues:**
+1. ✅ Tune prefetch_count based on message size/processing time
+2. ✅ Monitor connection pool usage
+3. ✅ Check for blocking operations in handlers
+4. ✅ Review retry delays (too aggressive?)
+5. ✅ Monitor queue depth and consumer lag
 
 ## 🗺️ **Roadmap**
 
