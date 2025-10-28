@@ -2,6 +2,7 @@
 name = "rust-rabbit"
 version = "1.0.0"
 edition = "2021"
+resolver = "2"
 description = "A simple, reliable RabbitMQ client library for Rust. Easy to use with flexible retry mechanisms and minimal configuration."
 license = "MIT"
 authors = ["Minh Nghĩa <nghiaphamln3@gmail.com>"]
