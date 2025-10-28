@@ -1,8 +1,4 @@
-use crate::{
-    connection::Connection,
-    error::RustRabbitError,
-    retry::RetryConfig,
-};
+use crate::{connection::Connection, error::RustRabbitError, retry::RetryConfig};
 use futures_lite::stream::StreamExt;
 use lapin::{
     options::{BasicAckOptions, BasicConsumeOptions, QueueDeclareOptions},
@@ -17,8 +13,8 @@ use tracing::{debug, error};
 
 /// Message wrapper with retry tracking
 #[derive(Debug)]
-pub struct Message<T> 
-where 
+pub struct Message<T>
+where
     T: Clone,
 {
     pub data: T,
@@ -27,8 +23,8 @@ where
     channel: Arc<Channel>,
 }
 
-impl<T> Clone for Message<T> 
-where 
+impl<T> Clone for Message<T>
+where
     T: Clone,
 {
     fn clone(&self) -> Self {
@@ -41,8 +37,8 @@ where
     }
 }
 
-impl<T> Message<T> 
-where 
+impl<T> Message<T>
+where
     T: Clone,
 {
     /// Acknowledge the message
@@ -56,10 +52,13 @@ where
     /// Reject and requeue the message
     pub async fn nack(&self, requeue: bool) -> Result<(), RustRabbitError> {
         self.channel
-            .basic_nack(self.tag, lapin::options::BasicNackOptions { 
-                multiple: false, 
-                requeue 
-            })
+            .basic_nack(
+                self.tag,
+                lapin::options::BasicNackOptions {
+                    multiple: false,
+                    requeue,
+                },
+            )
             .await
             .map_err(RustRabbitError::from)
     }
@@ -90,7 +89,11 @@ impl ConsumerBuilder {
     }
 
     /// Bind to an exchange with routing key
-    pub fn bind_to_exchange(mut self, exchange: impl Into<String>, routing_key: impl Into<String>) -> Self {
+    pub fn bind_to_exchange(
+        mut self,
+        exchange: impl Into<String>,
+        routing_key: impl Into<String>,
+    ) -> Self {
         self.exchange_name = Some(exchange.into());
         self.routing_key = Some(routing_key.into());
         self
@@ -134,6 +137,7 @@ pub struct Consumer {
     queue_name: String,
     exchange_name: Option<String>,
     routing_key: Option<String>,
+    #[allow(dead_code)]
     retry_config: Option<RetryConfig>,
     prefetch_count: u16,
     auto_ack: bool,
@@ -153,10 +157,13 @@ impl Consumer {
         Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
         let channel = self.connection.create_channel().await?;
-        
+
         // Set prefetch count
         channel
-            .basic_qos(self.prefetch_count, lapin::options::BasicQosOptions::default())
+            .basic_qos(
+                self.prefetch_count,
+                lapin::options::BasicQosOptions::default(),
+            )
             .await?;
 
         // Setup queue and exchange
@@ -223,10 +230,13 @@ impl Consumer {
                         if auto_ack {
                             // Reject malformed messages
                             if let Err(e) = channel_clone
-                                .basic_nack(delivery.delivery_tag, lapin::options::BasicNackOptions {
-                                    multiple: false,
-                                    requeue: false,
-                                })
+                                .basic_nack(
+                                    delivery.delivery_tag,
+                                    lapin::options::BasicNackOptions {
+                                        multiple: false,
+                                        requeue: false,
+                                    },
+                                )
                                 .await
                             {
                                 error!("Failed to nack malformed message: {}", e);

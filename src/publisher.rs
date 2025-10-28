@@ -9,23 +9,12 @@ use std::sync::Arc;
 use tracing::debug;
 
 /// Publish options builder
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PublishOptions {
     pub mandatory: bool,
     pub immediate: bool,
     pub expiration: Option<String>,
     pub priority: Option<u8>,
-}
-
-impl Default for PublishOptions {
-    fn default() -> Self {
-        Self {
-            mandatory: false,
-            immediate: false,
-            expiration: None,
-            priority: None,
-        }
-    }
 }
 
 impl PublishOptions {
@@ -72,7 +61,7 @@ impl Publisher {
         T: Serialize,
     {
         let channel = self.connection.create_channel().await?;
-        
+
         // Declare exchange (simplified - always topic for flexibility)
         channel
             .exchange_declare(
@@ -101,7 +90,7 @@ impl Publisher {
         T: Serialize,
     {
         let channel = self.connection.create_channel().await?;
-        
+
         // Declare queue
         channel
             .queue_declare(

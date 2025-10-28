@@ -1,5 +1,5 @@
 //! Simplified Error Handling for rust-rabbit
-//! 
+//!
 //! Basic error types for core RabbitMQ operations without complex pattern-specific errors.
 
 use thiserror::Error;
@@ -9,25 +9,25 @@ use thiserror::Error;
 pub enum RustRabbitError {
     #[error("Connection error: {0}")]
     Connection(String),
-    
+
     #[error("RabbitMQ protocol error: {0}")]
     Protocol(#[from] lapin::Error),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(String),
-    
+
     #[error("Configuration error: {0}")]
     Configuration(String),
-    
+
     #[error("Consumer error: {0}")]
     Consumer(String),
-    
+
     #[error("Publisher error: {0}")]
     Publisher(String),
-    
+
     #[error("Retry error: {0}")]
     Retry(String),
-    
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -60,7 +60,7 @@ impl RustRabbitError {
             RustRabbitError::Io(_) => true,
         }
     }
-    
+
     /// Check if the error indicates a connection issue
     pub fn is_connection_error(&self) -> bool {
         matches!(
@@ -68,7 +68,7 @@ impl RustRabbitError {
             RustRabbitError::Connection(_) | RustRabbitError::Protocol(_) | RustRabbitError::Io(_)
         )
     }
-    
+
     /// Get a user-friendly error message
     pub fn user_message(&self) -> String {
         match self {
@@ -79,7 +79,8 @@ impl RustRabbitError {
                 "RabbitMQ protocol error. The connection might be unstable.".to_string()
             }
             RustRabbitError::Serialization(_) => {
-                "Failed to serialize/deserialize message. Please check your message format.".to_string()
+                "Failed to serialize/deserialize message. Please check your message format."
+                    .to_string()
             }
             RustRabbitError::Configuration(_) => {
                 "Configuration error. Please check your settings.".to_string()
@@ -87,9 +88,7 @@ impl RustRabbitError {
             RustRabbitError::Consumer(_) => {
                 "Consumer error. Failed to process message.".to_string()
             }
-            RustRabbitError::Publisher(_) => {
-                "Publisher error. Failed to send message.".to_string()
-            }
+            RustRabbitError::Publisher(_) => "Publisher error. Failed to send message.".to_string(),
             RustRabbitError::Retry(_) => {
                 "Retry mechanism failed. Message processing could not be completed.".to_string()
             }
@@ -117,31 +116,31 @@ impl From<url::ParseError> for RustRabbitError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_error_retryable() {
         let conn_error = RustRabbitError::Connection("test".to_string());
         assert!(conn_error.is_retryable());
-        
+
         let serialization_error = RustRabbitError::Serialization("test".to_string());
         assert!(!serialization_error.is_retryable());
-        
+
         let config_error = RustRabbitError::Configuration("test".to_string());
         assert!(!config_error.is_retryable());
-        
+
         let retry_error = RustRabbitError::Retry("test".to_string());
         assert!(!retry_error.is_retryable());
     }
-    
+
     #[test]
     fn test_connection_error_detection() {
         let conn_error = RustRabbitError::Connection("test".to_string());
         assert!(conn_error.is_connection_error());
-        
+
         let serialization_error = RustRabbitError::Serialization("test".to_string());
         assert!(!serialization_error.is_connection_error());
     }
-    
+
     #[test]
     fn test_user_messages() {
         let errors = vec![
@@ -149,19 +148,19 @@ mod tests {
             RustRabbitError::Serialization("test".to_string()),
             RustRabbitError::Configuration("test".to_string()),
         ];
-        
+
         for error in errors {
             let message = error.user_message();
             assert!(!message.is_empty());
             assert!(!message.contains("test")); // User message should not contain internal details
         }
     }
-    
+
     #[test]
     fn test_from_serde_json_error() {
         let json_error = serde_json::from_str::<i32>("invalid json").unwrap_err();
         let rabbit_error = RustRabbitError::from(json_error);
-        
+
         matches!(rabbit_error, RustRabbitError::Serialization(_));
     }
 }

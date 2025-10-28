@@ -1,9 +1,9 @@
 //! Basic Publisher Example
-//! 
+//!
 //! This example demonstrates how to publish messages using rust-rabbit.
 //! Shows both exchange-based and direct queue publishing.
 
-use rust_rabbit::{Connection, Publisher, PublishOptions};
+use rust_rabbit::{Connection, PublishOptions, Publisher};
 use serde::Serialize;
 use std::time::Duration;
 use tracing::{info, Level};
@@ -27,9 +27,7 @@ struct Notification {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
+    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
 
     info!("Starting basic publisher example");
 
@@ -39,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Publish directly to a queue (simple)
     info!("Publishing messages directly to queue...");
-    
+
     let order = Order {
         id: 1001,
         customer_id: 123,
@@ -48,7 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Simple publish with default options
-    publisher.publish_to_queue("order_queue", &order, None).await?;
+    publisher
+        .publish_to_queue("order_queue", &order, None)
+        .await?;
     info!("Order {} published to queue", order.id);
 
     // Example 2: Publish with custom options
@@ -60,13 +60,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let priority_options = PublishOptions::new()
-        .persistent(true)                    // Survive broker restart
-        .priority(9)                         // High priority (0-255)
-        .ttl(Duration::from_secs(300))      // 5 minutes TTL
-        .header("source", "web-api")         // Custom header
+        .persistent(true) // Survive broker restart
+        .priority(9) // High priority (0-255)
+        .ttl(Duration::from_secs(300)) // 5 minutes TTL
+        .header("source", "web-api") // Custom header
         .header("customer_tier", "premium"); // Another header
 
-    publisher.publish_to_queue("order_queue", &priority_order, Some(priority_options)).await?;
+    publisher
+        .publish_to_queue("order_queue", &priority_order, Some(priority_options))
+        .await?;
     info!("Priority order {} published to queue", priority_order.id);
 
     // Example 3: Publish to exchange with routing (advanced)
@@ -80,7 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Publish to topic exchange with routing key
-    publisher.publish_to_exchange("notifications", "order.confirmation", &notification, None).await?;
+    publisher
+        .publish_to_exchange("notifications", "order.confirmation", &notification, None)
+        .await?;
     info!("Notification published to exchange");
 
     // Example 4: Different message types to different routes
@@ -95,7 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .priority(9)
         .header("alert_type", "high_value_order");
 
-    publisher.publish_to_exchange("notifications", "alert.urgent", &urgent_notification, Some(urgent_options)).await?;
+    publisher
+        .publish_to_exchange(
+            "notifications",
+            "alert.urgent",
+            &urgent_notification,
+            Some(urgent_options),
+        )
+        .await?;
     info!("Urgent notification published to exchange");
 
     // Example 5: Batch publishing
@@ -109,7 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             status: "batch".to_string(),
         };
 
-        publisher.publish_to_queue("batch_orders", &batch_order, None).await?;
+        publisher
+            .publish_to_queue("batch_orders", &batch_order, None)
+            .await?;
     }
     info!("Batch of 10 orders published");
 
@@ -126,7 +139,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data: "test message".to_string(),
     };
 
-    match publisher.publish_to_queue("test_queue", &invalid_msg, None).await {
+    match publisher
+        .publish_to_queue("test_queue", &invalid_msg, None)
+        .await
+    {
         Ok(_) => info!("Message published successfully"),
         Err(e) => {
             if e.is_retryable() {
@@ -151,7 +167,7 @@ async fn publish_with_retry(
     max_retries: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut attempts = 0;
-    
+
     loop {
         match publisher.publish_to_queue(queue, message, None).await {
             Ok(_) => {

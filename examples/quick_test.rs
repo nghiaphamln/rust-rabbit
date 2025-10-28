@@ -14,19 +14,25 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     // Create connection
-    let connection = Arc::new(
-        Connection::new("amqp://guest:guest@localhost:5672")
-            .await?
-    );
+    let connection = Arc::new(Connection::new("amqp://guest:guest@localhost:5672").await?);
 
     // Create publisher
     let publisher = Publisher::new(Arc::clone(&connection));
 
     // Create some test messages
     let messages = vec![
-        TestMessage { id: 1, content: "Hello World!".to_string() },
-        TestMessage { id: 2, content: "Rust Rabbit is simple!".to_string() },
-        TestMessage { id: 3, content: "Easy messaging!".to_string() },
+        TestMessage {
+            id: 1,
+            content: "Hello World!".to_string(),
+        },
+        TestMessage {
+            id: 2,
+            content: "Rust Rabbit is simple!".to_string(),
+        },
+        TestMessage {
+            id: 3,
+            content: "Easy messaging!".to_string(),
+        },
     ];
 
     // Publish messages to queue
@@ -41,14 +47,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     // Start consuming (will run forever)
     println!("Starting consumer...");
-    consumer.consume(|message: Message<TestMessage>| async move {
-        println!("Received message: {:?}", message.data);
-        
-        // Simulate some processing
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        
-        Ok(())
-    }).await?;
+    consumer
+        .consume(|message: Message<TestMessage>| async move {
+            println!("Received message: {:?}", message.data);
+
+            // Simulate some processing
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }

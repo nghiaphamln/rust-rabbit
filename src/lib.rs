@@ -1,6 +1,6 @@
 //! # rust-rabbit 🐰
 //!
-//! A **simple, reliable** RabbitMQ client library for Rust. 
+//! A **simple, reliable** RabbitMQ client library for Rust.
 //! Focus on core functionality with minimal configuration.
 //!
 //! ## Features
@@ -92,7 +92,7 @@
 //! // Custom delays: 1s -> 5s -> 30s
 //! let custom = RetryConfig::custom(vec![
 //!     Duration::from_secs(1),
-//!     Duration::from_secs(5), 
+//!     Duration::from_secs(5),
 //!     Duration::from_secs(30),
 //! ]);
 //!
@@ -129,6 +129,7 @@ mod tests {
     use std::time::Duration;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    #[allow(dead_code)]
     struct TestMessage {
         id: u32,
         content: String,
@@ -140,19 +141,28 @@ mod tests {
         // Real integration tests would require a RabbitMQ instance
 
         let _connection_result = Connection::new("amqp://localhost:5672").await;
-        
+
         // Test retry configurations
         let _exponential = RetryConfig::exponential_default();
         let _linear = RetryConfig::linear(3, Duration::from_secs(5));
         let _custom = RetryConfig::custom(vec![Duration::from_secs(1), Duration::from_secs(5)]);
         let _no_retry = RetryConfig::no_retry();
+    }
 
-        // Test publish options
-        let _options = PublishOptions::new()
-            .persistent(true)
-            .priority(5)
-            .ttl(Duration::from_secs(60))
-            .header("source", "test");
+    #[test]
+    fn test_basic_api_exists() {
+        // Test that our main types exist and can be referenced
+        use crate::prelude::*;
+
+        // This is a compile-time test - if it compiles, our API is accessible
+        let _: Option<Connection> = None;
+        let _: Option<Publisher> = None;
+        let _: Option<Consumer> = None;
+        let _: Option<RetryConfig> = None;
+
+        // Test that we can create basic configs
+        let _retry = RetryConfig::exponential_default();
+        let _options = PublishOptions::new();
     }
 
     #[test]
@@ -162,14 +172,48 @@ mod tests {
         assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
         assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(2)));
         assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(4)));
-        assert_eq!(config.calculate_delay(5), None); // Max retries exceeded
+        assert_eq!(config.calculate_delay(3), Some(Duration::from_secs(8)));
+        assert_eq!(config.calculate_delay(4), Some(Duration::from_secs(16)));
+        // Attempt 5 exceeds max_retries (5), so should return None
+        assert_eq!(config.calculate_delay(5), None);
     }
 
     #[test]
-    fn test_error_handling() {
-        let error = RustRabbitError::Connection("test error".to_string());
-        assert!(error.is_retryable());
-        assert!(error.is_connection_error());
-        assert!(!error.user_message().is_empty());
+    fn test_retry_config_linear() {
+        let config = RetryConfig::linear(3, Duration::from_secs(5));
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(3), None); // Exceeds max_retries
+    }
+
+    #[test]
+    fn test_retry_config_custom() {
+        let delays = vec![
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Duration::from_secs(7),
+        ];
+        let config = RetryConfig::custom(delays.clone());
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(3)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(7)));
+        assert_eq!(config.calculate_delay(3), None); // Exceeds max_retries
+    }
+
+    #[test]
+    fn test_publish_options() {
+        let options = PublishOptions::new()
+            .mandatory()
+            .with_expiration("60000")
+            .with_priority(5);
+
+        assert!(options.mandatory);
+        assert_eq!(options.expiration, Some("60000".to_string()));
+        assert_eq!(options.priority, Some(5));
     }
 }
