@@ -132,6 +132,130 @@ RetryPolicy::builder()
 
 ## 📋 **Usage Examples**
 
+## 🎯 **BaseConsumer - Simplified Error Handling (NEW!)**
+
+The new `BaseConsumer` trait provides a simplified, declarative approach to message processing with automatic retry handling and ACK management.
+
+### **Key Benefits**
+- ✅ **Automatic ACK**: Messages are automatically acknowledged on success
+- ♻️ **Smart Retry**: Automatic retry with delay exchange for transient errors  
+- 💀 **Dead Letter Queue**: Permanent errors automatically sent to DLQ
+- 🗑️ **Message Discarding**: Option to discard spam/invalid messages
+- ⏱️ **Custom Delays**: Per-error custom retry delays
+
+### **Quick Start with BaseConsumer**
+
+```rust
+use rust_rabbit::{BaseConsumer, ProcessingError, ConsumerOptions, RetryPolicy, RustRabbit, RabbitConfig};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::{sync::Arc, time::Duration};
+
+#[derive(Deserialize, Serialize, Debug)]
+struct OrderMessage {
+    order_id: String,
+    customer_id: String,
+    amount: f64,
+}
+
+struct OrderHandler;
+
+#[async_trait]
+impl BaseConsumer<OrderMessage> for OrderHandler {
+    async fn handle(
+        &self, 
+        message: OrderMessage, 
+        context: MessageContext
+    ) -> Result<(), ProcessingError> {
+        
+        // Business logic with declarative error handling
+        match self.process_order(&message).await {
+            Ok(()) => Ok(()), // ✅ Success -> Automatic ACK
+            
+            // ♻️ Retryable errors - framework handles retry automatically
+            Err(ApiError::NetworkTimeout) => 
+                Err(ProcessingError::retryable("Network timeout")),
+            Err(ApiError::RateLimit) => 
+                Err(ProcessingError::retryable_with_delay(
+                    "Rate limited", Duration::from_secs(30) // Custom delay
+                )),
+            
+            // 💀 Permanent errors - sent to DLQ automatically
+            Err(ApiError::InvalidPayment) => 
+                Err(ProcessingError::non_retryable("Invalid payment method")),
+            
+            // 🗑️ Spam/invalid - discarded without DLQ
+            Err(ApiError::Spam) => 
+                Err(ProcessingError::discard("Spam order detected")),
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rabbit = RustRabbit::new(RabbitConfig::default()).await?;
+    
+    let options = ConsumerOptions::builder("orders")
+        .auto_declare_queue()
+        .auto_declare_exchange()
+        .retry_policy(RetryPolicy::fast_for_queue("orders"))
+        .manual_ack() // Required for retry support
+        .build();
+    
+    let consumer = rabbit.consumer(options).await?;
+    let handler = Arc::new(OrderHandler);
+    
+    // Framework handles all retry logic automatically!
+    consumer.consume_with_base_consumer::<OrderMessage, OrderHandler>(handler).await?;
+    Ok(())
+}
+```
+
+### **ProcessingError Types**
+
+```rust
+// ♻️ Retryable errors (automatic retry with delay exchange)
+ProcessingError::retryable("Network timeout")
+ProcessingError::retryable_with_delay("Rate limit", Duration::from_secs(30))
+
+// 💀 Permanent errors (sent to DLQ automatically)
+ProcessingError::non_retryable("Invalid data format")
+
+// 🗑️ Discard (no DLQ, just drop the message)
+ProcessingError::discard("Spam message detected")
+```
+
+### **Migration from MessageHandler**
+
+**Old Pattern (Manual ACK/NACK management):**
+```rust
+impl MessageHandler<OrderMessage> for Handler {
+    async fn handle(&self, message: OrderMessage, _: MessageContext) -> MessageResult {
+        match process(&message).await {
+            Ok(_) => MessageResult::Ack,      // Manual ACK decision
+            Err(_) => MessageResult::Retry,   // Manual retry decision  
+        }
+    }
+}
+
+// Usage
+consumer.consume::<OrderMessage, Handler>(handler).await?;
+```
+
+**New Pattern (Automatic error handling):**
+```rust
+impl BaseConsumer<OrderMessage> for Handler {
+    async fn handle(&self, message: OrderMessage, _: MessageContext) -> Result<(), ProcessingError> {
+        process(&message).await
+            .map_err(|e| ProcessingError::retryable(e.to_string()))?;
+        Ok(()) // Automatic ACK
+    }
+}
+
+// Usage  
+consumer.consume_with_base_consumer::<OrderMessage, Handler>(handler).await?;
+```
+
 ## ⚡ **Retry Patterns & Setup**
 
 ### **Quick Retry Presets**
@@ -995,6 +1119,10 @@ cargo bench
 Comprehensive examples in the `examples/` directory:
 
 ```bash
+# New BaseConsumer examples (Simplified error handling)
+cargo run --example simple_base_consumer        # Quick start with BaseConsumer
+cargo run --example base_consumer_example       # Comprehensive error scenarios
+
 # Core features
 cargo run --example minutes_retry_preset        # NEW: One-line retry setup
 cargo run --example simple_auto_consumer_example

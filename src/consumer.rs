@@ -1,6 +1,6 @@
 use crate::{
     connection::ConnectionManager,
-    error::{RabbitError, Result},
+    error::{ProcessingError, RabbitError, Result},
     metrics::RustRabbitMetrics,
     publisher::{CustomExchangeDeclareOptions, CustomQueueDeclareOptions, Publisher},
     retry::{DelayedMessageExchange, RetryPolicy},
@@ -11,7 +11,8 @@ use lapin::{
     message::Delivery,
     options::{
         BasicAckOptions, BasicConsumeOptions, BasicNackOptions, BasicPublishOptions,
-        ExchangeDeclareOptions, QueueBindOptions, QueueDeclareOptions as LapinQueueDeclareOptions,
+        BasicQosOptions, ExchangeDeclareOptions, QueueBindOptions,
+        QueueDeclareOptions as LapinQueueDeclareOptions,
     },
     types::FieldTable,
     BasicProperties, Channel, ExchangeKind,
@@ -21,7 +22,31 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, info, warn};
 
-/// Message handler trait for processing consumed messages
+/// Base consumer trait for processing messages with smart retry handling
+///
+/// This trait provides a simplified interface where:
+/// - Messages are automatically ACK'd after successful processing
+/// - Retryable errors automatically publish to delay exchange
+/// - Non-retryable errors send to DLQ or discard based on configuration
+#[async_trait]
+pub trait BaseConsumer<T>: Send + Sync + 'static
+where
+    T: DeserializeOwned + Send + Sync,
+{
+    /// Process a message and return the result
+    ///
+    /// # Returns
+    /// - `Ok(())` - Message processed successfully, will be ACK'd automatically
+    /// - `Err(ProcessingError::Retryable { .. })` - Will retry with delay exchange
+    /// - `Err(ProcessingError::NonRetryable { .. })` - Will reject/send to DLQ
+    async fn handle(
+        &self,
+        message: T,
+        context: MessageContext,
+    ) -> std::result::Result<(), ProcessingError>;
+}
+
+/// Message handler trait for processing consumed messages (legacy, prefer BaseConsumer)
 #[async_trait]
 pub trait MessageHandler<T>: Send + Sync + 'static
 where
@@ -400,7 +425,262 @@ impl Consumer {
         self.metrics = Some(metrics);
     }
 
-    /// Start consuming messages with the given handler
+    /// Consume messages using BaseConsumer trait with automatic retry handling
+    pub async fn consume_with_base_consumer<T, H>(&self, handler: Arc<H>) -> Result<()>
+    where
+        T: DeserializeOwned + Send + Sync + 'static,
+        H: BaseConsumer<T>,
+    {
+        let connection = self.connection_manager.get_connection().await?;
+        let channel = connection.create_channel().await?;
+        let publisher = Publisher::new(self.connection_manager.clone());
+
+        // Set up QoS if prefetch count is specified
+        if let Some(prefetch_count) = self.options.prefetch_count {
+            channel
+                .basic_qos(prefetch_count, BasicQosOptions::default())
+                .await?;
+        }
+
+        let semaphore = Arc::new(Semaphore::new(self.options.concurrency));
+
+        // Consume messages
+        let mut consumer = channel
+            .basic_consume(
+                &self.options.queue_name,
+                self.options.consumer_tag.as_deref().unwrap_or(""),
+                BasicConsumeOptions {
+                    no_local: false,
+                    no_ack: self.options.auto_ack,
+                    exclusive: self.options.exclusive,
+                    nowait: false,
+                },
+                self.options.arguments.clone(),
+            )
+            .await?;
+
+        info!(
+            "Started consuming from queue: {} with BaseConsumer",
+            self.options.queue_name
+        );
+
+        // Process messages
+        while let Some(delivery) = consumer.next().await {
+            let delivery = delivery?;
+            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+                RabbitError::Generic(anyhow::anyhow!("Semaphore acquire error: {}", e))
+            })?;
+
+            let handler_clone = handler.clone();
+            let retry_policy = self.options.retry_policy.clone();
+            let dead_letter_exchange = self.options.dead_letter_exchange.clone();
+            let channel_clone = channel.clone();
+            let publisher_clone = publisher.clone();
+            let exchange_name = self
+                .options
+                .exchange_name
+                .clone()
+                .unwrap_or_else(|| self.options.queue_name.clone());
+
+            tokio::spawn(async move {
+                let _permit = permit;
+                if let Err(e) = Self::process_message_with_base_consumer(
+                    delivery,
+                    handler_clone,
+                    retry_policy,
+                    dead_letter_exchange,
+                    channel_clone,
+                    publisher_clone,
+                    exchange_name,
+                )
+                .await
+                {
+                    error!("Error processing message with BaseConsumer: {}", e);
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Process a single message using BaseConsumer
+    async fn process_message_with_base_consumer<T, H>(
+        delivery: Delivery,
+        handler: Arc<H>,
+        retry_policy: Option<RetryPolicy>,
+        dead_letter_exchange: Option<String>,
+        channel: Channel,
+        publisher: Publisher,
+        exchange_name: String,
+    ) -> Result<()>
+    where
+        T: DeserializeOwned + Send + Sync,
+        H: BaseConsumer<T>,
+    {
+        let context = Self::build_message_context(&delivery);
+
+        // Deserialize message
+        let message: T = match serde_json::from_slice(&delivery.data) {
+            Ok(msg) => msg,
+            Err(e) => {
+                error!("Failed to deserialize message: {}", e);
+                Self::reject_message(&delivery, &channel, false).await?;
+                return Ok(());
+            }
+        };
+
+        // Handle message with BaseConsumer
+        match handler.handle(message, context.clone()).await {
+            Ok(()) => {
+                // Success - automatically ACK the message
+                Self::ack_message(&delivery, &channel).await?;
+                debug!(
+                    "Message processed successfully and ACK'd: {}",
+                    delivery.delivery_tag
+                );
+            }
+            Err(ProcessingError::Retryable {
+                message: error_msg,
+                custom_delay,
+            }) => {
+                // Retryable error - send to retry/delay exchange
+                if let Some(ref policy) = retry_policy {
+                    info!("Retryable error occurred: {}. Scheduling retry.", error_msg);
+
+                    // Use custom delay if specified, otherwise calculate from policy
+                    let delay = custom_delay
+                        .unwrap_or_else(|| policy.calculate_delay(context.retry_count + 1));
+
+                    Self::handle_retry_with_delay(
+                        &delivery,
+                        &channel,
+                        &context,
+                        policy,
+                        &publisher,
+                        &exchange_name,
+                        delay,
+                    )
+                    .await?;
+                } else {
+                    warn!(
+                        "Retryable error but no retry policy configured. Rejecting message: {}",
+                        error_msg
+                    );
+                    Self::reject_message(&delivery, &channel, false).await?;
+                }
+            }
+            Err(ProcessingError::NonRetryable {
+                message: error_msg,
+                send_to_dlq,
+            }) => {
+                // Non-retryable error
+                error!("Non-retryable error occurred: {}", error_msg);
+
+                if send_to_dlq {
+                    if let Some(ref dle) = dead_letter_exchange {
+                        Self::send_to_dead_letter(&delivery, dle, &context, &publisher).await?;
+                    } else {
+                        warn!("Error should go to DLQ but no dead letter exchange configured. Rejecting message.");
+                        Self::reject_message(&delivery, &channel, false).await?;
+                    }
+                } else {
+                    // Discard the message (reject without DLQ)
+                    info!(
+                        "Discarding message due to non-retryable error: {}",
+                        error_msg
+                    );
+                    Self::reject_message(&delivery, &channel, false).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle retry with custom delay
+    async fn handle_retry_with_delay(
+        delivery: &Delivery,
+        channel: &Channel,
+        context: &MessageContext,
+        retry_policy: &RetryPolicy,
+        publisher: &Publisher,
+        exchange_name: &str,
+        delay: std::time::Duration,
+    ) -> Result<()> {
+        let max_retries = retry_policy.max_retries;
+        let current_retry = context.retry_count;
+
+        if current_retry >= max_retries {
+            warn!(
+                "Max retries ({}) exceeded for message, sending to dead letter",
+                max_retries
+            );
+
+            // Send to dead letter exchange if configured
+            if let Some(dlx) = &retry_policy.dead_letter_exchange {
+                Self::send_to_dead_letter(delivery, dlx, context, publisher).await?;
+            } else {
+                Self::reject_message(delivery, channel, false).await?;
+            }
+            return Ok(());
+        }
+
+        // Create delayed exchange name
+        let delayed_exchange_name = format!("{}.retry", exchange_name);
+
+        // Prepare message for retry with updated headers
+        let mut headers = delivery.properties.headers().clone().unwrap_or_default();
+        headers.insert(
+            "x-retry-count".into(),
+            lapin::types::AMQPValue::LongInt((current_retry + 1) as i32),
+        );
+        headers.insert(
+            "x-original-exchange".into(),
+            lapin::types::AMQPValue::LongString(exchange_name.into()),
+        );
+        headers.insert(
+            "x-original-routing-key".into(),
+            lapin::types::AMQPValue::LongString(delivery.routing_key.to_string().into()),
+        );
+
+        // Set delay
+        headers.insert(
+            "x-delay".into(),
+            lapin::types::AMQPValue::LongInt(delay.as_millis() as i32),
+        );
+
+        let properties = BasicProperties::default()
+            .with_content_type("application/json".into())
+            .with_delivery_mode(2)
+            .with_headers(headers);
+
+        // Publish to delay exchange
+        let connection = publisher.get_connection().await?;
+        let retry_channel = connection.create_channel().await?;
+
+        retry_channel
+            .basic_publish(
+                &delayed_exchange_name,
+                delivery.routing_key.as_str(), // Use original routing key as string
+                BasicPublishOptions::default(),
+                &delivery.data,
+                properties,
+            )
+            .await?;
+
+        // ACK the original message since we've scheduled retry
+        Self::ack_message(delivery, channel).await?;
+
+        info!(
+            "Message scheduled for retry #{} with delay {:?}ms",
+            current_retry + 1,
+            delay.as_millis()
+        );
+
+        Ok(())
+    }
+
+    /// Start consuming messages with the given handler (legacy MessageHandler trait)
     pub async fn consume<T, H>(&self, handler: Arc<H>) -> Result<()>
     where
         T: DeserializeOwned + Send + Sync + 'static,

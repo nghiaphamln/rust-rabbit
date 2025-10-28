@@ -105,5 +105,80 @@ pub enum RustRabbitError {
     LockPoisoned,
 }
 
+/// Processing error types for consumer handlers
+#[derive(Error, Debug, Clone)]
+pub enum ProcessingError {
+    /// Retryable error - message should be retried with delay
+    #[error("Retryable error: {message}")]
+    Retryable {
+        message: String,
+        /// Optional custom retry delay override
+        custom_delay: Option<std::time::Duration>,
+    },
+
+    /// Non-retryable error - message should be rejected permanently
+    #[error("Non-retryable error: {message}")]
+    NonRetryable {
+        message: String,
+        /// Whether to send to dead letter queue (default: true)
+        send_to_dlq: bool,
+    },
+}
+
+impl ProcessingError {
+    /// Create a retryable error with default delay
+    pub fn retryable<S: Into<String>>(message: S) -> Self {
+        Self::Retryable {
+            message: message.into(),
+            custom_delay: None,
+        }
+    }
+
+    /// Create a retryable error with custom delay
+    pub fn retryable_with_delay<S: Into<String>>(message: S, delay: std::time::Duration) -> Self {
+        Self::Retryable {
+            message: message.into(),
+            custom_delay: Some(delay),
+        }
+    }
+
+    /// Create a non-retryable error (will be sent to DLQ)
+    pub fn non_retryable<S: Into<String>>(message: S) -> Self {
+        Self::NonRetryable {
+            message: message.into(),
+            send_to_dlq: true,
+        }
+    }
+
+    /// Create a non-retryable error that should be discarded (not sent to DLQ)
+    pub fn discard<S: Into<String>>(message: S) -> Self {
+        Self::NonRetryable {
+            message: message.into(),
+            send_to_dlq: false,
+        }
+    }
+
+    /// Check if this error is retryable
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, ProcessingError::Retryable { .. })
+    }
+
+    /// Check if this error should be sent to DLQ
+    pub fn should_send_to_dlq(&self) -> bool {
+        match self {
+            ProcessingError::Retryable { .. } => false,
+            ProcessingError::NonRetryable { send_to_dlq, .. } => *send_to_dlq,
+        }
+    }
+
+    /// Get custom delay if specified
+    pub fn custom_delay(&self) -> Option<std::time::Duration> {
+        match self {
+            ProcessingError::Retryable { custom_delay, .. } => *custom_delay,
+            ProcessingError::NonRetryable { .. } => None,
+        }
+    }
+}
+
 /// Result type alias for the rust-rabbit library
 pub type Result<T> = std::result::Result<T, RabbitError>;

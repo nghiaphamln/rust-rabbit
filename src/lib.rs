@@ -164,8 +164,10 @@ pub use config::{
     RabbitConfigBuilder, RetryConfig, RetryConfigBuilder,
 };
 pub use connection::{Connection, ConnectionManager, ConnectionStats};
-pub use consumer::{Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler};
-pub use error::{RabbitError, Result, RustRabbitError};
+pub use consumer::{
+    BaseConsumer, Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler,
+};
+pub use error::{ProcessingError, RabbitError, Result, RustRabbitError};
 pub use health::{ConnectionStatus, HealthChecker};
 pub use metrics::{MetricsTimer, RustRabbitMetrics};
 pub use patterns::{
