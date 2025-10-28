@@ -1,6 +1,6 @@
 [package]
 name = "rust-rabbit"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "A high-performance, production-ready RabbitMQ client library for Rust with zero-configuration simplicity, advanced retry patterns, enterprise messaging patterns, and comprehensive observability. Features one-line setup, automatic retry policies, Request-Response/Saga/Event Sourcing patterns, Prometheus metrics, and circuit breaker resilience."
 license = "MIT"
