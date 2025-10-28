@@ -850,7 +850,9 @@ impl Consumer {
             delayed_exchange.setup().await?;
 
             // Setup queue binding for retry mechanism
-            delayed_exchange.setup_queue_retry(&options.queue_name).await?;
+            delayed_exchange
+                .setup_queue_retry(&options.queue_name)
+                .await?;
 
             debug!(
                 "Setup retry infrastructure for queue: {} with delayed exchange: {}",

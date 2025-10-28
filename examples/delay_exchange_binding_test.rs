@@ -23,13 +23,13 @@ struct TestHandler;
 impl MessageHandler<TestMessage> for TestHandler {
     async fn handle(&self, message: TestMessage, _context: MessageContext) -> MessageResult {
         info!("Processing message: {:?}", message);
-        
+
         // Simulate random failure for testing retry
         if fastrand::f32() < 0.7 {
             warn!("Simulated processing failure for message: {}", message.id);
             return MessageResult::Retry;
         }
-        
+
         info!("Successfully processed message: {}", message.id);
         MessageResult::Ack
     }
@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup the delayed exchange infrastructure
     delayed_exchange.setup().await?;
-    
+
     // This is the key fix - setup queue binding for retry mechanism
     delayed_exchange.setup_queue_retry("test_queue").await?;
 
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handler = std::sync::Arc::new(TestHandler);
 
     info!("Starting consumer...");
-    
+
     // Start consumer in background
     let consumer_handle = tokio::spawn(async move {
         if let Err(e) = consumer.consume(handler).await {

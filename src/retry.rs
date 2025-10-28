@@ -781,16 +781,13 @@ mod delay_exchange_binding_tests {
         };
 
         let retry_policy = RetryPolicy::default();
-        let delayed_exchange = DelayedMessageExchange::new(
-            connection_manager,
-            "test.retry".to_string(),
-            retry_policy,
-        );
+        let delayed_exchange =
+            DelayedMessageExchange::new(connection_manager, "test.retry".to_string(), retry_policy);
 
         // The fact that this compiles means our API is correct
         // We can't actually test the functionality without RabbitMQ running
         let _result = delayed_exchange.setup_queue_retry("test_queue").await;
-        
+
         // If we get here, the method exists and has the right signature
         assert!(true, "setup_queue_retry method exists and is callable");
     }
@@ -799,21 +796,19 @@ mod delay_exchange_binding_tests {
     fn test_delay_exchange_api_structure() {
         // Test that DelayedMessageExchange has the expected methods
         use std::any::type_name;
-        
+
         // This compilation test verifies our API structure
         let type_name = type_name::<DelayedMessageExchange>();
         assert!(type_name.contains("DelayedMessageExchange"));
-        
+
         // The fact that this code compiles means all our imports and types are correct
-        let _config = RabbitConfig::builder()
-            .connection_string("test")
-            .build();
-            
+        let _config = RabbitConfig::builder().connection_string("test").build();
+
         let _policy = RetryPolicy::builder()
             .max_retries(3)
             .initial_delay(Duration::from_millis(100))
             .build();
-            
+
         // Test passes if compilation succeeds
         assert!(true);
     }

@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
     let connection = ConnectionManager::new(config).await?;
 
-    // 2. Consumer với retry (1 dòng!)
+    // 2. Consumer with retry (1 line!)
     let options = ConsumerOptions {
         auto_ack: false,
         retry_policy: Some(RetryPolicy::fast()),
@@ -145,7 +145,7 @@ RetryPolicy::builder()
 ### **Consumer Setup Patterns**
 
 ```rust
-// 🔥 SIÊU NHANH - Copy/paste setup:
+// 🔥 SUPER FAST - Copy/paste setup:
 let config = RabbitConfig::builder()
     .connection_string("amqp://user:pass@localhost:5672/vhost")
     .build();
@@ -158,10 +158,10 @@ let options = ConsumerOptions {
 };
 let consumer = Consumer::new(connection, options).await?;
 
-// ⚡ Custom với builder
+// ⚡ Custom with builder
 let retry = RetryPolicy::builder()
-    .fast_preset()          // Dùng preset làm base
-    .max_retries(3)         // Override số lần retry
+    .fast_preset()          // Use preset as base
+    .max_retries(3)         // Override retry count
     .build();
 
 // 🛠 Ultra custom
@@ -208,7 +208,7 @@ fn should_retry(error: &MyError) -> bool {
 
 ## � **Consumer Retry Configuration & Message Handling**
 
-### **📋 Consumer Setup với Retry Policy**
+### **📋 Consumer Setup with Retry Policy**
 
 ```rust
 use rust_rabbit::{
@@ -344,7 +344,7 @@ async fn process_order(message: &OrderMessage) -> Result<(), ProcessingError> {
 
 ### **🛠️ Advanced Handler Patterns**
 
-#### **Pattern 1: Conditional Retry với Context**
+#### **Pattern 1: Conditional Retry with Context**
 ```rust
 #[async_trait]
 impl MessageHandler<OrderMessage> for OrderHandler {
@@ -370,7 +370,7 @@ impl MessageHandler<OrderMessage> for OrderHandler {
 }
 ```
 
-#### **Pattern 2: Circuit Breaker với Handler**
+#### **Pattern 2: Circuit Breaker with Handler**
 ```rust
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -480,39 +480,52 @@ sudo rabbitmqctl list_queues name messages
 sudo rabbitmqctl list_queues | grep dlq
 ```
 
+## 🐛 **Prefetch Count Debugging**
+
+**Common Issue**: `prefetch_count` not working?
+
+### ❌ **WRONG** (prefetch_count ignored):
+```rust
+ConsumerOptions {
+    auto_ack: true,         // ← Wrong! Messages are ACKed immediately
+    prefetch_count: Some(5), // → No effect
+    ..Default::default()
+}
+```
+
 ## �🐛 **Prefetch Count Debugging**
 
-**Common Issue**: `prefetch_count` không hoạt động?
+**Common Issue**: `prefetch_count` not working?
 
-### ❌ **Sai** (prefetch_count bị ignore):
+### ❌ **WRONG** (prefetch_count ignored):
 ```rust
 ConsumerOptions {
-    auto_ack: true,         // ← Sai! Messages được ACK ngay lập tức
-    prefetch_count: Some(5), // → Không có tác dụng
+    auto_ack: true,         // ← Wrong! Messages are ACKed immediately
+    prefetch_count: Some(5), // → No effect
     ..Default::default()
 }
 ```
 
-### ✅ **Đúng** (prefetch_count hoạt động):
+### ✅ **CORRECT** (prefetch_count works):
 ```rust
 ConsumerOptions {
-    auto_ack: false,        // ← Đúng! Messages phải ACK thủ công
-    prefetch_count: Some(5), // → Giới hạn 5 messages chưa ACK
+    auto_ack: false,        // ← Correct! Messages must be ACKed manually
+    prefetch_count: Some(5), // → Limit 5 unACKed messages
     ..Default::default()
 }
 ```
 
-**Tại sao?** 
-- `prefetch_count` chỉ hoạt động khi có messages "chưa được ACK"
-- `auto_ack: true` → Messages được ACK ngay → Không có backpressure
-- `auto_ack: false` → Messages đợi manual ACK → QoS limits work
+**Why?** 
+- `prefetch_count` only works when there are "unACKed" messages
+- `auto_ack: true` → Messages ACKed immediately → No backpressure
+- `auto_ack: false` → Messages wait for manual ACK → QoS limits work
 
 ### **Debug Commands**
 ```bash
 # Compile check
 cargo check
 
-# Run với RabbitMQ
+# Run with RabbitMQ
 cargo run --example fast_consumer_template
 
 # Test prefetch behavior
@@ -756,19 +769,19 @@ cargo test retry::tests
 
 1. **Wrong prefetch_count setup**:
    ```rust
-   auto_ack: true,  // ← Sai! prefetch_count không hoạt động
+   auto_ack: true,  // ← Wrong! prefetch_count won't work
    ```
 
 2. **Not handling retry errors**:
    ```rust
-   // ❌ Không phân biệt retryable vs non-retryable errors
+   // ❌ Not distinguishing retryable vs non-retryable errors
    Err(_) => delivery.nack(Default::default()).await?,
    ```
 
 3. **Missing manual ACK**:
    ```rust
-   // ❌ Quên ACK message
-   // Message sẽ bị stuck ở unACK'd state
+   // ❌ Forgot to ACK message
+   // Message will be stuck in unACK'd state
    ```
 
 ### ✅ **Best Practices**
@@ -776,7 +789,7 @@ cargo test retry::tests
 1. **Always use auto_ack: false for production**:
    ```rust
    ConsumerOptions {
-       auto_ack: false,  // Required for retry và backpressure
+       auto_ack: false,  // Required for retry and backpressure
        retry_policy: Some(RetryPolicy::fast()),
        ..Default::default()
    }
@@ -1038,7 +1051,7 @@ impl MessageHandler<OrderMessage> for IdempotentOrderHandler {
 }
 ```
 
-#### **2. Graceful Shutdown với Retry**
+#### **2. Graceful Shutdown with Retry**
 ```rust
 use tokio::signal;
 use std::sync::Arc;
@@ -1088,7 +1101,7 @@ impl MessageHandler<OrderMessage> for GracefulOrderHandler {
 
 ### **⚠️ Common Pitfalls to Avoid**
 
-#### **❌ Pitfall 1: Auto-ACK với Retry Policy**
+#### **❌ Pitfall 1: Auto-ACK with Retry Policy**
 ```rust
 // 🚫 WRONG - Retry won't work!
 let options = ConsumerOptions::builder("orders")
@@ -1103,7 +1116,7 @@ let options = ConsumerOptions::builder("orders")
     .build();
 ```
 
-#### **❌ Pitfall 2: Poison Messages với Infinite Retry**
+#### **❌ Pitfall 2: Poison Messages with Infinite Retry**
 ```rust
 // 🚫 WRONG - Can create poison messages
 #[async_trait]
