@@ -1,6 +1,6 @@
 [package]
 name = "rust-rabbit"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A high-performance Rust library for RabbitMQ messaging with advanced features: metrics, circuit breaker, batching, and graceful shutdown"
 license = "MIT"

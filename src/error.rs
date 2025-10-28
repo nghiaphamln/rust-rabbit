@@ -40,5 +40,70 @@ pub enum RabbitError {
     Generic(#[from] anyhow::Error),
 }
 
+/// Extended error type for advanced patterns (Phase 2)
+#[derive(Error, Debug)]
+pub enum RustRabbitError {
+    // Core errors
+    #[error("Rabbit error: {0}")]
+    Rabbit(#[from] RabbitError),
+
+    // Request-Response pattern errors
+    #[error("Request timeout")]
+    RequestTimeout,
+
+    #[error("Response channel closed")]
+    ResponseChannelClosed,
+
+    // Saga pattern errors
+    #[error("Saga not found")]
+    SagaNotFound,
+
+    #[error("Saga executor not found for action type: {0}")]
+    SagaExecutorNotFound(String),
+
+    #[error("Saga compensation failed")]
+    SagaCompensationFailed,
+
+    // Event sourcing errors
+    #[error("Event sequence error - events must be in order")]
+    EventSequenceError,
+
+    #[error("Unknown event type: {0}")]
+    UnknownEventType(String),
+
+    #[error("Aggregate not found")]
+    AggregateNotFound,
+
+    #[error("Snapshot creation failed")]
+    SnapshotCreationFailed,
+
+    // Priority queue errors
+    #[error("Queue is full")]
+    QueueFull,
+
+    #[error("Queue not found: {0}")]
+    QueueNotFound(String),
+
+    #[error("Invalid priority value: {0}")]
+    InvalidPriority(u8),
+
+    // Deduplication errors
+    #[error("Duplicate message detected")]
+    DuplicateMessage,
+
+    #[error("Deduplication store error: {0}")]
+    DeduplicationStore(String),
+
+    // General async errors
+    #[error("Channel send error")]
+    ChannelSendError,
+
+    #[error("Task join error: {0}")]
+    TaskJoinError(String),
+
+    #[error("Lock poisoned")]
+    LockPoisoned,
+}
+
 /// Result type alias for the rust-rabbit library
 pub type Result<T> = std::result::Result<T, RabbitError>;

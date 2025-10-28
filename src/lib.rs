@@ -114,6 +114,7 @@ pub mod consumer;
 pub mod error;
 pub mod health;
 pub mod metrics;
+pub mod patterns; // Phase 2: Advanced messaging patterns
 pub mod publisher;
 pub mod retry;
 pub mod shutdown;
@@ -128,9 +129,36 @@ pub use config::{
 };
 pub use connection::{Connection, ConnectionManager, ConnectionStats};
 pub use consumer::{Consumer, ConsumerOptions, ConsumerOptionsBuilder, MessageHandler};
-pub use error::{RabbitError, Result};
+pub use error::{RabbitError, Result, RustRabbitError};
 pub use health::{ConnectionStatus, HealthChecker};
 pub use metrics::{MetricsTimer, RustRabbitMetrics};
+pub use patterns::{
+    // Message deduplication
+    deduplication::{
+        ContentHash, DeduplicatedMessage, DeduplicationConfig, DeduplicationManager,
+        DeduplicationResult, DeduplicationStrategy, DuplicateInfo, MessageId,
+    },
+    // Event sourcing
+    event_sourcing::{
+        AggregateId, AggregateRoot, AggregateSnapshot, DomainEvent, EventReplayService,
+        EventSequence, EventSourcingRepository, EventStore, InMemoryEventStore,
+    },
+    // Priority queues
+    priority::{
+        Priority, PriorityConsumer, PriorityMessage, PriorityQueue, PriorityQueueConfig,
+        PriorityRouter,
+    },
+    // Request-Response pattern
+    request_response::{
+        CorrelationId, RequestHandler, RequestMessage, RequestResponseClient,
+        RequestResponseServer, ResponseMessage,
+    },
+    // Saga pattern
+    saga::{
+        SagaAction, SagaCoordinator, SagaId, SagaInstance, SagaStatus, SagaStep, SagaStepExecutor,
+        StepResult, StepStatus,
+    },
+};
 pub use publisher::{
     CustomExchangeDeclareOptions, CustomQueueDeclareOptions, PublishOptions, PublishOptionsBuilder,
     Publisher,
