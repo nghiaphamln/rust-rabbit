@@ -4,7 +4,7 @@
 //! publishing and consuming messages with built-in retry metadata.
 
 use rust_rabbit::{
-    Connection, Consumer, ErrorType, MessageEnvelope, Publisher, RetryConfig,
+    Connection, Consumer, MessageEnvelope, Publisher, RetryConfig,
 };
 use serde::{Deserialize, Serialize};
 

@@ -104,6 +104,18 @@ impl ConsumerBuilder {
         self
     }
 
+    /// Set routing key (for use with bind_to_exchange)
+    pub fn routing_key(mut self, routing_key: impl Into<String>) -> Self {
+        self.routing_key = Some(routing_key.into());
+        self
+    }
+
+    /// Set concurrency level (same as prefetch count)
+    pub fn concurrency(mut self, count: u16) -> Self {
+        self.prefetch_count = Some(count);
+        self
+    }
+
     /// Configure retry behavior
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = Some(retry_config);

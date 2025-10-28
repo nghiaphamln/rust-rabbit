@@ -1,14 +1,17 @@
-//! Basic Consumer Example
+//! Basic Consumer Example (Simplified)
 //!
-//! This example demonstrates how to consume messages using rust-rabbit.
-//! Shows basic consumption, error handling, and retry configuration.
+//! This example demonstrates core Consumer functionality:
+//! - Simple consumption
+//! - Retry configuration  
+//! - Exchange binding
+//! - Error handling patterns
 
 use rust_rabbit::{Connection, Consumer, RetryConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{error, info, warn, Level};
+use tracing::{error, info, warn};
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct Order {
     id: u32,
     customer_id: u32,
@@ -16,399 +19,208 @@ struct Order {
     status: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct Notification {
     recipient: String,
     subject: String,
-    body: String,
     priority: u8,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    tracing_subscriber::fmt().init();
+    info!("🚀 Starting basic consumer examples");
 
-    info!("Starting basic consumer example");
-
-    // Connect to RabbitMQ
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
-    // Example 1: Simple consumer without retry
-    info!("Starting simple consumer...");
+    // Start all consumer types
+    let _handles = vec![
+        start_simple_consumer(connection.clone()),
+        start_retry_consumer(connection.clone()),
+        start_exchange_consumer(connection.clone()),
+        start_manual_ack_consumer(connection.clone()),
+    ];
 
-    let simple_consumer = Consumer::builder(connection.clone(), "simple_queue")
-        .with_prefetch(5) // Process up to 5 messages in parallel
-        .build();
+    info!("✅ All consumers started. Press Ctrl+C to stop.");
 
-    // Spawn simple consumer in background
-    let simple_handle = tokio::spawn(async move {
-        simple_consumer
-            .consume(|message: rust_rabbit::Message<Order>| async move {
-                let order = &message.data;
-                info!(
-                    "Processing simple order: {} for customer {} (${:.2})",
-                    order.id, order.customer_id, order.amount
-                );
-
-                // Simulate processing time
-                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                // Simple validation
-                if order.amount < 0.0 {
-                    error!("Invalid order amount: {}", order.amount);
-                    return Err("Invalid amount".into());
-                }
-
-                info!("Order {} processed successfully", order.id);
-                Ok(()) // ACK the message
-            })
-            .await
-    });
-
-    // Example 2: Consumer with retry configuration
-    info!("Starting consumer with retry...");
-
-    let retry_consumer = Consumer::builder(connection.clone(), "order_queue")
-        .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s (5 retries)
-        .with_prefetch(3)
-        .build();
-
-    let retry_handle = tokio::spawn(async move {
-        retry_consumer
-            .consume(|message: rust_rabbit::Message<Order>| async move {
-                let order = &message.data;
-                info!(
-                    "Processing order with retry: {} (${:.2})",
-                    order.id, order.amount
-                );
-
-                // Simulate different types of errors
-                match order.status.as_str() {
-                    "invalid" => {
-                        error!("Invalid order status - not retrying");
-                        Ok(()) // Don't retry invalid data
-                    }
-                    "network_error" => {
-                        warn!("Simulating network error - will retry");
-                        Err("Network temporarily unavailable".into()) // Will retry
-                    }
-                    "rate_limited" => {
-                        warn!("Simulating rate limit - will retry");
-                        Err("Rate limit exceeded".into()) // Will retry
-                    }
-                    _ => {
-                        // Normal processing
-                        match process_order(order.clone()).await {
-                            Ok(_) => Ok(()),
-                            Err(e) => Err(e),
-                        }
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 3: Consumer with exchange binding
-    info!("Starting consumer with exchange binding...");
-
-    let exchange_consumer = Consumer::builder(connection.clone(), "notification_queue")
-        .bind_to_exchange("notifications", "order.*") // Receive all order-related notifications
-        .with_retry(RetryConfig::linear(3, Duration::from_secs(5))) // 3 retries, 5s each
-        .with_prefetch(10)
-        .build();
-
-    let exchange_handle = tokio::spawn(async move {
-        exchange_consumer
-            .consume(|message: rust_rabbit::Message<Notification>| async move {
-                let notification = &message.data;
-                info!(
-                    "Processing notification: {} (priority: {})",
-                    notification.subject, notification.priority
-                );
-
-                // Simulate notification processing
-                match send_notification(notification).await {
-                    Ok(_) => {
-                        info!("Notification sent to {}", notification.recipient);
-                        Ok(())
-                    }
-                    Err(e) => {
-                        if notification.priority >= 8 {
-                            // High priority notifications - retry
-                            warn!("High priority notification failed, will retry: {}", e);
-                            Err(e)
-                        } else {
-                            // Low priority - don't retry
-                            warn!("Low priority notification failed, not retrying: {}", e);
-                            Ok(())
-                        }
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 4: Consumer with custom retry pattern
-    info!("Starting consumer with custom retry...");
-
-    let custom_retry = RetryConfig::custom(vec![
-        Duration::from_secs(1),    // First retry after 1 second
-        Duration::from_secs(5),    // Second retry after 5 seconds
-        Duration::from_secs(30),   // Third retry after 30 seconds
-        Duration::from_secs(300), // Fourth retry after 5 minutes
-    ]);
-
-    let custom_consumer = Consumer::builder(connection.clone(), "api_calls")
-        .with_retry(custom_retry)
-        .with_prefetch(2)
-        .build();
-
-    let custom_handle = tokio::spawn(async move {
-        custom_consumer
-            .consume(|message: rust_rabbit::Message<serde_json::Value>| async move {
-                let request = &message.data;
-                info!("Processing API request: {:?}", request);
-
-                // Simulate API call processing
-                match external_api_call(request).await {
-                    Ok(response) => {
-                        info!("API call successful: {:?}", response);
-                        Ok(())
-                    }
-                    Err(ApiError::RateLimit) => {
-                        warn!("API rate limited - will retry with custom delays");
-                        Err("API rate limit exceeded".into())
-                    }
-                    Err(ApiError::ServerError) => {
-                        warn!("API server error - will retry");
-                        Err("API server error".into())
-                    }
-                    Err(ApiError::BadRequest) => {
-                        error!("Bad API request - not retrying");
-                        Ok(()) // Don't retry client errors
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 5: Consumer for batch processing
-    info!("Starting batch consumer...");
-
-    let batch_consumer = Consumer::builder(connection.clone(), "batch_orders")
-        .with_retry(RetryConfig::exponential(
-            3,
-            Duration::from_millis(500),
-            Duration::from_secs(30),
-        ))
-        .with_prefetch(1) // Process one batch at a time
-        .build();
-
-    let batch_handle = tokio::spawn(async move {
-        batch_consumer
-            .consume(|message: rust_rabbit::Message<Order>| async move {
-                let order = &message.data;
-                info!("Processing batch order: {}", order.id);
-
-                // Simulate batch processing
-                match process_batch_order(order.clone()).await {
-                    Ok(_) => Ok(()),
-                    Err(e) if is_retryable_error(&e) => {
-                        warn!("Retryable batch error: {}", e);
-                        Err(e)
-                    }
-                    Err(e) => {
-                        error!("Non-retryable batch error: {}", e);
-                        Ok(()) // Don't retry
-                    }
-                }
-            })
-            .await
-    });
-
-    info!("All consumers started. Press Ctrl+C to stop...");
-
-    // Wait for shutdown signal
+    // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
-    info!("Shutdown signal received, stopping consumers...");
-
-    // Gracefully stop consumers
-    simple_handle.abort();
-    retry_handle.abort();
-    exchange_handle.abort();
-    custom_handle.abort();
-    batch_handle.abort();
-
-    info!("Basic consumer example completed!");
+    info!("Received shutdown signal, stopping consumers...");
+    
+    // In a real application, you would gracefully shutdown the consumers here
     Ok(())
 }
 
-// Simulate order processing
-async fn process_order(order: Order) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Simulate processing time
-    tokio::time::sleep(Duration::from_millis(200)).await;
+// Example 1: Simple consumer without retry
+fn start_simple_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "simple_orders")
+            .concurrency(5)
+            .build();
 
-    // Business logic validation
-    if order.amount <= 0.0 {
-        return Err("Invalid order amount".into());
+        consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+            let order = &msg.data;
+            info!("🔹 Simple - Processing order {} (${:.2})", order.id, order.amount);
+            
+            // Basic validation
+            if order.amount <= 0.0 {
+                error!("Invalid amount for order {}", order.id);
+                return Err("Invalid amount".into());
+            }
+            
+            // Simulate processing
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            info!("✅ Order {} processed", order.id);
+            Ok(())
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Example 2: Consumer with retry configuration
+fn start_retry_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "retry_orders")
+            .with_retry(RetryConfig::exponential_default()) // 1s→2s→4s→8s→16s
+            .concurrency(3)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+            let order = &msg.data;
+            info!("🔄 Retry - Processing order {} (attempt {})", order.id, msg.retry_attempt + 1);
+            
+            // Simulate different error scenarios
+            match order.status.as_str() {
+                "invalid" => {
+                    error!("Invalid order - not retrying");
+                    Ok(()) // Don't retry invalid data
+                }
+                "network_error" => {
+                    warn!("Network error - will retry");
+                    Err("Network temporarily unavailable".into())
+                }
+                _ => {
+                    // Normal processing
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    info!("✅ Order {} processed successfully", order.id);
+                    Ok(())
+                }
+            }
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Example 3: Consumer with exchange binding
+fn start_exchange_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "notifications")
+            .bind_to_exchange("notifications", "order.*")
+            .with_retry(RetryConfig::linear(2, Duration::from_secs(5)))
+            .concurrency(10)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Notification>| async move {
+            let notification = &msg.data;
+            info!("📧 Exchange - Processing notification for {}", notification.recipient);
+            
+            // Priority-based processing
+            let processing_time = match notification.priority {
+                9..=10 => Duration::from_millis(50),  // Critical - fast
+                6..=8 => Duration::from_millis(100),  // High priority
+                _ => Duration::from_millis(200),      // Normal
+            };
+            
+            tokio::time::sleep(processing_time).await;
+            
+            // Simulate sending notification
+            if notification.recipient.contains("invalid") {
+                warn!("Invalid recipient - will retry");
+                return Err("Invalid recipient".into());
+            }
+            
+            info!("✅ Notification sent to {}", notification.recipient);
+            Ok(())
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Example 4: Manual ACK consumer
+fn start_manual_ack_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "manual_orders")
+            .manual_ack() // Disable auto-acknowledge
+            .concurrency(2)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+            let order = &msg.data;
+            info!("🤲 Manual ACK - Processing order {}", order.id);
+            
+            // Simulate processing
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            
+            if order.amount > 1000.0 {
+                info!("High value order {} - manual verification needed", order.id);
+                // In real scenario, you might want to defer ACK until manual verification
+                
+                // For demo, we'll ACK it
+                msg.ack().await.map_err(|e| {
+                    error!("Failed to ACK message: {}", e);
+                    e
+                })?;
+                
+                info!("✅ High value order {} manually verified and ACKed", order.id);
+            } else {
+                // Normal processing - ACK immediately
+                msg.ack().await.map_err(|e| {
+                    error!("Failed to ACK message: {}", e);
+                    e
+                })?;
+                
+                info!("✅ Order {} processed and ACKed", order.id);
+            }
+            
+            Ok(())
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Helper function to publish test messages (run separately)
+#[allow(dead_code)]
+async fn publish_test_messages() -> Result<(), Box<dyn std::error::Error>> {
+    use rust_rabbit::Publisher;
+    
+    let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
+    let publisher = Publisher::new(connection);
+    
+    // Publish to different queues
+    let test_orders = vec![
+        ("simple_orders", Order { id: 1, customer_id: 100, amount: 99.99, status: "pending".to_string() }),
+        ("retry_orders", Order { id: 2, customer_id: 101, amount: 199.99, status: "network_error".to_string() }),
+        ("manual_orders", Order { id: 3, customer_id: 102, amount: 1999.99, status: "pending".to_string() }),
+    ];
+    
+    for (queue, order) in test_orders {
+        publisher.publish_to_queue(queue, &order, None).await?;
+        info!("📤 Published order {} to {}", order.id, queue);
     }
-
-    if order.customer_id == 0 {
-        return Err("Invalid customer ID".into());
-    }
-
-    // Simulate occasional transient errors
-    if order.id % 10 == 0 {
-        return Err("Database temporarily unavailable".into());
-    }
-
-    info!("Order {} processed: ${:.2}", order.id, order.amount);
+    
+    // Publish notification to exchange
+    let notification = Notification {
+        recipient: "customer@example.com".to_string(),
+        subject: "Order confirmation".to_string(),
+        priority: 7,
+    };
+    
+    publisher.publish_to_exchange("notifications", "order.created", &notification, None).await?;
+    info!("📤 Published notification to exchange");
+    
     Ok(())
-}
-
-// Simulate notification sending
-async fn send_notification(
-    notification: &Notification,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Simulate network delay
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Simulate occasional failures
-    if notification.recipient.contains("invalid") {
-        return Err("Invalid email address".into());
-    }
-
-    if notification.priority >= 9 {
-        // Simulate rate limiting for high priority
-        if fastrand::f32() < 0.3 {
-            return Err("Rate limit exceeded".into());
-        }
-    }
-
-    Ok(format!("Notification sent to {}", notification.recipient))
-}
-
-// Simulate external API call
-#[derive(Debug)]
-enum ApiError {
-    RateLimit,
-    ServerError,
-    BadRequest,
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ApiError::RateLimit => write!(f, "Rate limit exceeded"),
-            ApiError::ServerError => write!(f, "Server error"),
-            ApiError::BadRequest => write!(f, "Bad request"),
-        }
-    }
-}
-
-impl std::error::Error for ApiError {}
-
-async fn external_api_call(request: &serde_json::Value) -> Result<serde_json::Value, ApiError> {
-    // Simulate API delay
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Simulate different types of API errors
-    let random = fastrand::f32();
-
-    if random < 0.1 {
-        Err(ApiError::RateLimit)
-    } else if random < 0.2 {
-        Err(ApiError::ServerError)
-    } else if random < 0.25 {
-        Err(ApiError::BadRequest)
-    } else {
-        Ok(serde_json::json!({
-            "status": "success",
-            "request_id": fastrand::u64(..),
-            "response": "API call processed successfully"
-        }))
-    }
-}
-
-// Simulate batch processing
-async fn process_batch_order(order: Order) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    info!("Starting batch processing for order {}", order.id);
-
-    // Simulate longer processing time for batches
-    tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Simulate batch-specific errors
-    if order.amount > 500.0 {
-        // Large orders need special handling
-        if fastrand::f32() < 0.2 {
-            return Err("Large order processing failed - retry".into());
-        }
-    }
-
-    info!("Batch order {} completed successfully", order.id);
-    Ok(())
-}
-
-// Helper function to classify errors
-fn is_retryable_error(error: &Box<dyn std::error::Error + Send + Sync>) -> bool {
-    let error_msg = error.to_string().to_lowercase();
-
-    // Classify errors as retryable or not
-    error_msg.contains("timeout")
-        || error_msg.contains("network")
-        || error_msg.contains("temporarily")
-        || error_msg.contains("rate limit")
-        || error_msg.contains("server error")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_process_order() {
-        let valid_order = Order {
-            id: 1,
-            customer_id: 123,
-            amount: 99.99,
-            status: "pending".to_string(),
-        };
-
-        let result = process_order(valid_order).await;
-        assert!(result.is_ok());
-
-        let invalid_order = Order {
-            id: 2,
-            customer_id: 0,
-            amount: -10.0,
-            status: "pending".to_string(),
-        };
-
-        let result = process_order(invalid_order).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_send_notification() {
-        let valid_notification = Notification {
-            recipient: "test@example.com".to_string(),
-            subject: "Test".to_string(),
-            body: "Test body".to_string(),
-            priority: 5,
-        };
-
-        let result = send_notification(&valid_notification).await;
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_error_classification() {
-        let retryable_error: Box<dyn std::error::Error + Send + Sync> = "Network timeout".into();
-        assert!(is_retryable_error(&retryable_error));
-
-        let permanent_error: Box<dyn std::error::Error + Send + Sync> =
-            "Invalid data format".into();
-        assert!(!is_retryable_error(&permanent_error));
-    }
 }

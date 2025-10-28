@@ -27,6 +27,11 @@ impl PublishOptions {
         self
     }
 
+    pub fn priority(mut self, priority: u8) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
     pub fn with_expiration(mut self, expiration: impl Into<String>) -> Self {
         self.expiration = Some(expiration.into());
         self

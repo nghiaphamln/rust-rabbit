@@ -47,7 +47,7 @@
 //! use rust_rabbit::{Connection, Consumer, RetryConfig};
 //! use serde::Deserialize;
 //!
-//! #[derive(Deserialize)]
+//! #[derive(Deserialize, Clone)]
 //! struct Order {
 //!     id: u32,
 //!     amount: f64,
@@ -58,14 +58,13 @@
 //!     let connection = Connection::new("amqp://localhost:5672").await?;
 //!     
 //!     let consumer = Consumer::builder(connection, "order_queue")
-//!         .retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
-//!         .bind_to_exchange("orders")
+//!         .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
+//!         .bind_to_exchange("orders", "order.*")
 //!         .concurrency(5)
-//!         .build()
-//!         .await?;
+//!         .build();
 //!     
-//!     consumer.consume(|order: Order| async move {
-//!         println!("Processing order {}: ${}", order.id, order.amount);
+//!     consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+//!         println!("Processing order {}: ${}", msg.data.id, msg.data.amount);
 //!         // Your business logic here
 //!         Ok(()) // ACK message
 //!     }).await?;
@@ -124,13 +123,12 @@
 //!     let envelope = MessageEnvelope::new(order, "order_queue")
 //!         .with_max_retries(3);
 //!     
-//!     publisher.publish_envelope_to_queue("order_queue", &envelope).await?;
+//!     publisher.publish_envelope_to_queue("order_queue", &envelope, None).await?;
 //!     
 //!     // Consumer with envelope processing
 //!     let consumer = Consumer::builder(connection, "order_queue")
 //!         .with_retry(RetryConfig::exponential_default())
-//!         .build()
-//!         .await?;
+//!         .build();
 //!     
 //!     consumer.consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
 //!         println!("Processing order {} (attempt {})", 

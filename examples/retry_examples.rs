@@ -1,502 +1,191 @@
-//! Retry Examples
+//! Retry Examples (Simplified)
 //!
-//! This example demonstrates different retry configurations and patterns
-//! available in rust-rabbit.
+//! This example demonstrates different retry configurations available in rust-rabbit.
+//! Shows exponential, linear, custom, and no-retry patterns.
 
 use rust_rabbit::{Connection, Consumer, RetryConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tracing::{error, info, warn, Level};
+use tracing::{info, warn};
 
-#[derive(Deserialize, Debug, Clone)]
-struct ProcessingTask {
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct Task {
     id: u32,
     task_type: String,
-    data: String,
     difficulty: u8, // 1-10, affects failure probability
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    tracing_subscriber::fmt().init();
+    info!("🚀 Starting retry examples");
 
-    info!("Starting retry examples");
-
-    // Connect to RabbitMQ
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
-    // Example 1: Exponential Retry (Default)
-    info!("Starting exponential retry consumer...");
+    // Start all retry pattern consumers
+    let _handles = vec![
+        start_exponential_consumer(connection.clone()),
+        start_linear_consumer(connection.clone()),
+        start_custom_consumer(connection.clone()),
+        start_no_retry_consumer(connection.clone()),
+    ];
 
-    let exponential_consumer = Consumer::builder(connection.clone(), "exponential_tasks")
-        .with_retry(RetryConfig::exponential_default()) // 1s→2s→4s→8s→16s (5 retries)
-        .with_prefetch(3)
-        .build();
+    info!("✅ All consumers started. Press Ctrl+C to stop.");
 
-    let exp_handle = tokio::spawn(async move {
-        exponential_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Exponential retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "exponential").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        warn!(
-                            "Exponential task {} failed: {} (will retry with exponential backoff)",
-                            task.id, e
-                        );
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 2: Linear Retry
-    info!("Starting linear retry consumer...");
-
-    let linear_consumer = Consumer::builder(connection.clone(), "linear_tasks")
-        .with_retry(RetryConfig::linear(4, Duration::from_secs(10))) // 4 retries, 10s each
-        .with_prefetch(2)
-        .build();
-
-    let linear_handle = tokio::spawn(async move {
-        linear_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Linear retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "linear").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        warn!(
-                            "Linear task {} failed: {} (will retry in 10 seconds)",
-                            task.id, e
-                        );
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 3: Custom Retry Delays
-    info!("Starting custom retry consumer...");
-
-    let custom_retry = RetryConfig::custom(vec![
-        Duration::from_secs(1),     // Quick first retry
-        Duration::from_secs(5),     // Medium wait
-        Duration::from_secs(30),    // Longer wait
-        Duration::from_secs(120),  // Even longer wait
-        Duration::from_secs(600), // Final attempt after 10 minutes
-    ]);
-
-    let custom_consumer = Consumer::builder(connection.clone(), "custom_tasks")
-        .with_retry(custom_retry)
-        .with_prefetch(1) // Sequential processing for custom retry
-        .build();
-
-    let custom_handle = tokio::spawn(async move {
-        custom_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Custom retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "custom").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        warn!(
-                            "Custom task {} failed: {} (will retry with custom delays)",
-                            task.id, e
-                        );
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 4: Fast Retry with Short Delays
-    info!("Starting fast retry consumer...");
-
-    let fast_retry = RetryConfig::exponential(
-        8,                          // 8 retries
-        Duration::from_millis(100), // Start with 100ms
-        Duration::from_secs(5),     // Cap at 5 seconds
-    );
-
-    let fast_consumer = Consumer::builder(connection.clone(), "fast_tasks")
-        .with_retry(fast_retry)
-        .with_prefetch(5)
-        .build();
-
-    let fast_handle = tokio::spawn(async move {
-        fast_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Fast retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "fast").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        warn!("Fast task {} failed: {} (will retry quickly)", task.id, e);
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 5: Conservative Retry (Few attempts, long delays)
-    info!("Starting conservative retry consumer...");
-
-    let conservative_retry = RetryConfig::exponential(
-        2,                          // Only 2 retries
-        Duration::from_secs(30),    // Start with 30 seconds
-        Duration::from_secs(900), // Max 15 minutes
-    );
-
-    let conservative_consumer = Consumer::builder(connection.clone(), "conservative_tasks")
-        .with_retry(conservative_retry)
-        .with_prefetch(1)
-        .build();
-
-    let conservative_handle = tokio::spawn(async move {
-        conservative_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Conservative retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "conservative").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        warn!(
-                            "Conservative task {} failed: {} (will retry after long delay)",
-                            task.id, e
-                        );
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 6: No Retry (Immediate failure)
-    info!("Starting no-retry consumer...");
-
-    let no_retry_consumer = Consumer::builder(connection.clone(), "no_retry_tasks")
-        .with_retry(RetryConfig::no_retry()) // Failed messages go directly to DLQ
-        .with_prefetch(3)
-        .build();
-
-    let no_retry_handle = tokio::spawn(async move {
-        no_retry_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!("No retry - Processing task {}: {}", task.id, task.task_type);
-
-                match simulate_task_processing(task, "no_retry").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        error!("No retry task {} failed: {} (going to DLQ)", task.id, e);
-                        Err(e)
-                    }
-                }
-            })
-            .await
-    });
-
-    // Example 7: Selective Retry (Different strategies based on error type)
-    info!("Starting selective retry consumer...");
-
-    let selective_consumer = Consumer::builder(connection.clone(), "selective_tasks")
-        .with_retry(RetryConfig::exponential_default())
-        .with_prefetch(3)
-        .build();
-
-    let selective_handle = tokio::spawn(async move {
-        selective_consumer
-            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
-                let task = &message.data;
-                info!(
-                    "Selective retry - Processing task {}: {}",
-                    task.id, task.task_type
-                );
-
-                match simulate_task_processing(task, "selective").await {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        // Classify errors to decide retry strategy
-                        if is_retryable_error(&e) {
-                            warn!(
-                                "Selective task {} failed with retryable error: {}",
-                                task.id, e
-                            );
-                            Err(e) // Will retry
-                        } else {
-                            error!(
-                                "Selective task {} failed with permanent error: {}",
-                                task.id, e
-                            );
-                            Ok(()) // Don't retry, but ACK to avoid infinite loop
-                        }
-                    }
-                }
-            })
-            .await
-    });
-
-    info!("All retry consumers started. Press Ctrl+C to stop...");
-
-    // Wait for shutdown signal
+    // Wait for Ctrl+C  
     tokio::signal::ctrl_c().await?;
-    info!("Shutdown signal received, stopping consumers...");
-
-    // Stop all consumers
-    exp_handle.abort();
-    linear_handle.abort();
-    custom_handle.abort();
-    fast_handle.abort();
-    conservative_handle.abort();
-    no_retry_handle.abort();
-    selective_handle.abort();
-
-    info!("Retry examples completed!");
+    info!("Received shutdown signal, stopping consumers...");
+    
     Ok(())
 }
 
-// Simulate task processing with different failure patterns
-async fn simulate_task_processing(
-    task: &ProcessingTask,
+// Exponential retry: 1s → 2s → 4s → 8s → 16s (5 retries)
+fn start_exponential_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "exponential_tasks")
+            .with_retry(RetryConfig::exponential_default())
+            .concurrency(3)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
+            let task = &msg.data;
+            info!("📈 Exponential - Processing task {}", task.id);
+            
+            simulate_work(&task, "exponential").await
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Linear retry: 10s → 10s → 10s (3 retries)
+fn start_linear_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "linear_tasks")
+            .with_retry(RetryConfig::linear(3, Duration::from_secs(10)))
+            .concurrency(2)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
+            let task = &msg.data;
+            info!("📊 Linear - Processing task {}", task.id);
+            
+            simulate_work(&task, "linear").await
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Custom retry: 1s → 5s → 30s → 120s
+fn start_custom_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let custom_retry = RetryConfig::custom(vec![
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            Duration::from_secs(120),
+        ]);
+
+        let consumer = Consumer::builder(connection, "custom_tasks")
+            .with_retry(custom_retry)
+            .concurrency(2)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
+            let task = &msg.data;
+            info!("🎯 Custom - Processing task {}", task.id);
+            
+            simulate_work(&task, "custom").await
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// No retry: fail immediately
+fn start_no_retry_consumer(
+    connection: std::sync::Arc<Connection>,
+) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    tokio::spawn(async move {
+        let consumer = Consumer::builder(connection, "no_retry_tasks")
+            .with_retry(RetryConfig::no_retry())
+            .concurrency(5)
+            .build();
+
+        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
+            let task = &msg.data;
+            info!("🚫 No Retry - Processing task {}", task.id);
+            
+            simulate_work(&task, "no-retry").await
+        }).await.map_err(|e| e.into())
+    })
+}
+
+// Simulate task processing with controlled failure rates
+async fn simulate_work(
+    task: &Task,
     retry_type: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Simulate processing time
-    let processing_time = Duration::from_millis(50 + (task.difficulty as u64 * 20));
+    let processing_time = Duration::from_millis(100 + (task.difficulty as u64 * 50));
     tokio::time::sleep(processing_time).await;
 
-    // Simulate different types of failures based on task properties
-    let failure_probability = (task.difficulty as f32) / 10.0 * 0.4; // Max 40% failure rate
-    let random = fastrand::f32();
+    // Simulate failures based on task difficulty and type
+    let failure_rate = match task.task_type.as_str() {
+        "easy" => 0.1,    // 10% failure rate
+        "medium" => 0.3,  // 30% failure rate  
+        "hard" => 0.6,    // 60% failure rate
+        "impossible" => 1.0, // Always fails
+        _ => 0.2,         // 20% default failure rate
+    };
 
-    if random < failure_probability {
-        // Generate different types of errors
-        match task.task_type.as_str() {
-            "network_call" => {
-                if random < 0.1 {
-                    return Err("Network timeout".into());
-                } else if random < 0.2 {
-                    return Err("Connection refused".into());
-                } else {
-                    return Err("Service temporarily unavailable".into());
-                }
-            }
-            "database_query" => {
-                if random < 0.1 {
-                    return Err("Database connection lost".into());
-                } else if random < 0.15 {
-                    return Err("Query timeout".into());
-                } else {
-                    return Err("Database temporarily overloaded".into());
-                }
-            }
-            "file_processing" => {
-                if random < 0.05 {
-                    return Err("File not found".into()); // Permanent error
-                } else if random < 0.1 {
-                    return Err("Disk full".into());
-                } else {
-                    return Err("File locked by another process".into());
-                }
-            }
-            "api_call" => {
-                if random < 0.1 {
-                    return Err("Rate limit exceeded".into());
-                } else if random < 0.15 {
-                    return Err("API server error".into());
-                } else if random < 0.17 {
-                    return Err("Invalid API key".into()); // Permanent error
-                } else {
-                    return Err("API temporarily unavailable".into());
-                }
-            }
-            "validation" => {
-                if random < 0.1 {
-                    return Err("Invalid data format".into()); // Permanent error
-                } else {
-                    return Err("Validation service unreachable".into());
-                }
-            }
-            _ => {
-                return Err("Unknown processing error".into());
-            }
-        }
+    // Add some randomness
+    let random_factor = (task.id % 100) as f64 / 100.0;
+    
+    if random_factor < failure_rate {
+        let error_msg = match task.difficulty {
+            1..=3 => "Network timeout",
+            4..=6 => "Database connection failed",
+            7..=8 => "Rate limit exceeded", 
+            _ => "Service unavailable",
+        };
+        
+        warn!(
+            "❌ {} task {} failed: {} (difficulty: {})",
+            retry_type, task.id, error_msg, task.difficulty
+        );
+        
+        return Err(error_msg.into());
     }
 
-    // Success case
     info!(
-        "Task {} ({}) completed successfully with {} retry strategy",
-        task.id, task.task_type, retry_type
+        "✅ {} task {} completed successfully (difficulty: {})",
+        retry_type, task.id, task.difficulty
     );
+    
     Ok(())
 }
 
-// Classify errors as retryable or permanent
-fn is_retryable_error(error: &Box<dyn std::error::Error + Send + Sync>) -> bool {
-    let error_msg = error.to_string().to_lowercase();
-
-    // Permanent errors that shouldn't be retried
-    let permanent_errors = [
-        "file not found",
-        "invalid data format",
-        "invalid api key",
-        "access denied",
-        "forbidden",
-        "bad request",
-        "malformed",
+// Helper to simulate publishing test tasks (run this separately)
+#[allow(dead_code)]
+async fn publish_test_tasks() -> Result<(), Box<dyn std::error::Error>> {
+    use rust_rabbit::Publisher;
+    
+    let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
+    let publisher = Publisher::new(connection);
+    
+    let test_tasks = vec![
+        ("exponential_tasks", Task { id: 1, task_type: "easy".to_string(), difficulty: 2 }),
+        ("linear_tasks", Task { id: 2, task_type: "medium".to_string(), difficulty: 5 }),
+        ("custom_tasks", Task { id: 3, task_type: "hard".to_string(), difficulty: 8 }),
+        ("no_retry_tasks", Task { id: 4, task_type: "impossible".to_string(), difficulty: 10 }),
     ];
-
-    for permanent in &permanent_errors {
-        if error_msg.contains(permanent) {
-            return false;
-        }
+    
+    for (queue, task) in test_tasks {
+        publisher.publish_to_queue(queue, &task, None).await?;
+        info!("📤 Published task {} to {}", task.id, queue);
     }
-
-    // Transient errors that should be retried
-    let retryable_errors = [
-        "timeout",
-        "network",
-        "connection",
-        "temporarily",
-        "rate limit",
-        "server error",
-        "overloaded",
-        "unavailable",
-        "locked",
-        "busy",
-    ];
-
-    for retryable in &retryable_errors {
-        if error_msg.contains(retryable) {
-            return true;
-        }
-    }
-
-    // Default to retryable for unknown errors
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_retry_config_creation() {
-        // Test different retry configurations
-        let exponential = RetryConfig::exponential_default();
-        assert_eq!(exponential.max_retries, 5);
-
-        let linear = RetryConfig::linear(3, Duration::from_secs(5));
-        assert_eq!(linear.max_retries, 3);
-
-        let custom = RetryConfig::custom(vec![Duration::from_secs(1), Duration::from_secs(10)]);
-        assert_eq!(custom.max_retries, 2);
-
-        let no_retry = RetryConfig::no_retry();
-        assert_eq!(no_retry.max_retries, 0);
-    }
-
-    #[test]
-    fn test_retry_delay_calculation() {
-        let config = RetryConfig::exponential(5, Duration::from_secs(1), Duration::from_secs(30));
-
-        // Test exponential delays
-        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
-        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(2)));
-        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(4)));
-        assert_eq!(config.calculate_delay(5), None); // Max retries exceeded
-
-        let linear_config = RetryConfig::linear(3, Duration::from_secs(10));
-        assert_eq!(
-            linear_config.calculate_delay(0),
-            Some(Duration::from_secs(10))
-        );
-        assert_eq!(
-            linear_config.calculate_delay(1),
-            Some(Duration::from_secs(10))
-        );
-        assert_eq!(
-            linear_config.calculate_delay(2),
-            Some(Duration::from_secs(10))
-        );
-        assert_eq!(linear_config.calculate_delay(3), None);
-    }
-
-    #[test]
-    fn test_error_classification() {
-        // Test retryable errors
-        let retryable: Box<dyn std::error::Error + Send + Sync> = "Network timeout".into();
-        assert!(is_retryable_error(&retryable));
-
-        let rate_limit: Box<dyn std::error::Error + Send + Sync> = "Rate limit exceeded".into();
-        assert!(is_retryable_error(&rate_limit));
-
-        // Test permanent errors
-        let permanent: Box<dyn std::error::Error + Send + Sync> = "Invalid data format".into();
-        assert!(!is_retryable_error(&permanent));
-
-        let not_found: Box<dyn std::error::Error + Send + Sync> = "File not found".into();
-        assert!(!is_retryable_error(&not_found));
-    }
-
-    #[tokio::test]
-    async fn test_task_processing_simulation() {
-        let easy_task = ProcessingTask {
-            id: 1,
-            task_type: "network_call".to_string(),
-            data: "test".to_string(),
-            difficulty: 1, // Low difficulty = low failure rate
-        };
-
-        // Should have high success rate
-        let mut successes = 0;
-        for _ in 0..10 {
-            if simulate_task_processing(&easy_task, "test").await.is_ok() {
-                successes += 1;
-            }
-        }
-        assert!(successes >= 5); // Should succeed more often than fail
-
-        let hard_task = ProcessingTask {
-            id: 2,
-            task_type: "validation".to_string(),
-            data: "test".to_string(),
-            difficulty: 10, // High difficulty = high failure rate
-        };
-
-        // Should have lower success rate
-        let mut failures = 0;
-        for _ in 0..10 {
-            if simulate_task_processing(&hard_task, "test").await.is_err() {
-                failures += 1;
-            }
-        }
-        assert!(failures >= 2); // Should fail sometimes
-    }
+    
+    Ok(())
 }

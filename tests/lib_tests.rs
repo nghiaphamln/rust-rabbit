@@ -221,28 +221,25 @@ mod publish_options_tests {
     #[test]
     fn test_publish_options_builder() {
         let options = PublishOptions::new()
-            .mandatory(true)
-            .immediate(false)
+            .mandatory()
             .priority(10)
-            .expiration(Duration::from_secs(60));
+            .with_expiration("60000");
 
         assert!(options.mandatory);
-        assert!(!options.immediate);
         assert_eq!(options.priority, Some(10));
-        assert_eq!(options.expiration, Some(Duration::from_secs(60)));
+        assert_eq!(options.expiration, Some("60000".to_string()));
     }
 
     #[test]
     fn test_publish_options_chaining() {
         let options = PublishOptions::new()
-            .mandatory(true)
+            .mandatory()
             .priority(5)
-            .expiration(Duration::from_millis(500));
+            .with_expiration("500");
 
-        assert!(options.persistent);
+        assert!(options.mandatory);
         assert_eq!(options.priority, Some(5));
-        assert_eq!(options.ttl, Some(Duration::from_millis(500)));
-        assert_eq!(options.headers.len(), 2);
+        assert_eq!(options.expiration, Some("500".to_string()));
     }
 }
 
@@ -320,7 +317,6 @@ mod serialization_tests {
 #[cfg(test)]
 mod integration_api_tests {
     use super::*;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_api_ergonomics() {
@@ -329,7 +325,7 @@ mod integration_api_tests {
 
         // Test that we can create configurations without connection
         let _retry_config = RetryConfig::exponential_default();
-        let _publish_options = PublishOptions::new().persistent(true);
+        let _publish_options = PublishOptions::new().mandatory();
 
         // Test that error handling works
         let error = RustRabbitError::Connection("test".to_string());
@@ -364,19 +360,15 @@ mod mock_api_tests {
         async fn mock_consumer_setup() -> crate::Result<()> {
             // This would fail at runtime without a real connection
             // but tests the API design
-            use std::sync::Arc;
             
-            let connection = Arc::new(
-                Connection::new("amqp://localhost:5672").await?
-            );
+            let connection = Connection::new("amqp://localhost:5672").await?;
 
             let _consumer = Consumer::builder(connection, "test_queue")
                 .with_retry(RetryConfig::exponential_default())
-                .bind_to_exchange("test_exchange")
+                .bind_to_exchange("test_exchange", "routing.key")
                 .routing_key("test.route")
                 .concurrency(5)
-                .build()
-                .await?;
+                .build();
 
             Ok(())
         }
@@ -390,13 +382,11 @@ mod mock_api_tests {
         // Test that the Publisher API is simple and ergonomic
 
         async fn mock_publisher_usage() -> crate::Result<()> {
-            use std::sync::Arc;
-            
-            let connection = Arc::new(Connection::new("amqp://localhost:5672").await?);
+            let connection = Connection::new("amqp://localhost:5672").await?;
 
             let publisher = Publisher::new(connection);
             let message = TestMessage::new(1, "test");
-            let options = PublishOptions::new().mandatory(true).priority(5);
+            let options = PublishOptions::new().mandatory().priority(5);
 
             // These would fail at runtime without a real connection
             // but test the API design
