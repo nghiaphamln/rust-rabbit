@@ -57,7 +57,7 @@ enum Priority {
 // Production application state
 #[derive(Clone)]
 struct AppState {
-    connection: Connection,
+    connection: Arc<Connection>,
     publisher: Arc<Publisher>,
     stats: Arc<RwLock<AppStats>>,
     shutdown: Arc<tokio::sync::Notify>,
@@ -80,7 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_thread_ids(true)
         .with_file(true)
         .with_line_number(true)
-        .json() // Use JSON format for production logs
         .init();
 
     info!("Starting production RabbitMQ application");
@@ -163,7 +162,7 @@ async fn initialize_app() -> Result<AppState, Box<dyn std::error::Error>> {
     let connection = create_connection_with_retry(&rabbitmq_url, connection_timeout).await?;
 
     // Create publisher
-    let publisher = Arc::new(Publisher::new(connection.clone()).await?);
+    let publisher = Arc::new(Publisher::new(connection.clone()));
 
     // Initialize statistics
     let stats = Arc::new(RwLock::new(AppStats::default()));
@@ -184,15 +183,15 @@ async fn initialize_app() -> Result<AppState, Box<dyn std::error::Error>> {
 async fn create_connection_with_retry(
     url: &str,
     timeout: u64,
-) -> Result<Connection, Box<dyn std::error::Error>> {
+) -> Result<Arc<Connection>, Box<dyn std::error::Error>> {
     let max_retries = 5;
     let mut current_retry = 0;
 
     loop {
         match tokio::time::timeout(Duration::from_secs(timeout), Connection::new(url)).await {
-            Ok(Ok(connection)) => {
+            Ok(Ok(conn)) => {
                 info!("Successfully connected to RabbitMQ");
-                return Ok(connection);
+                return Ok(conn);
             }
             Ok(Err(e)) => {
                 current_retry += 1;
@@ -236,25 +235,24 @@ async fn start_order_consumer(
     let retry_config = RetryConfig::exponential(
         3,                         // 3 retries max
         Duration::from_secs(5),    // Start with 5 seconds
-        Duration::from_minutes(5), // Cap at 5 minutes
+        Duration::from_secs(300), // Cap at 5 minutes
     );
 
     let consumer = Consumer::builder(app_state.connection.clone(), "order_events")
-        .retry(retry_config)
-        .concurrency(10) // Process up to 10 orders concurrently
-        .prefetch(20) // Prefetch 20 messages for better throughput
-        .build()
-        .await?;
+        .with_retry(retry_config)
+        .with_prefetch(10) // Process up to 10 orders concurrently
+        .build();
 
     let state = app_state.clone();
     let handle = tokio::spawn(async move {
         let result = consumer
-            .consume(move |order: OrderEvent| {
+            .consume(move |message: rust_rabbit::Message<OrderEvent>| {
                 let state = state.clone();
                 async move {
+                    let order = &message.data;
                     debug!("Processing order event: {}", order.order_id);
 
-                    match process_order_event(&order, &state).await {
+                    match process_order_event(order, &state).await {
                         Ok(_) => {
                             // Update statistics
                             let mut stats = state.stats.write().await;
@@ -296,27 +294,26 @@ async fn start_notification_consumer(
     let retry_config = RetryConfig::custom(vec![
         Duration::from_secs(1),     // Quick retry for transient issues
         Duration::from_secs(10),    // Medium delay
-        Duration::from_minutes(1),  // Longer delay
-        Duration::from_minutes(5),  // Even longer
-        Duration::from_minutes(30), // Final attempt after 30 minutes
+        Duration::from_secs(60),  // Longer delay
+        Duration::from_secs(300),  // Even longer
+        Duration::from_secs(1800), // Final attempt after 30 minutes
     ]);
 
     let consumer = Consumer::builder(app_state.connection.clone(), "notifications")
-        .retry(retry_config)
-        .concurrency(20) // High concurrency for notifications
-        .prefetch(50)
-        .build()
-        .await?;
+        .with_retry(retry_config)
+        .with_prefetch(20) // High concurrency for notifications
+        .build();
 
     let state = app_state.clone();
     let handle = tokio::spawn(async move {
         let result = consumer
-            .consume(move |notification: NotificationTask| {
+            .consume(move |message: rust_rabbit::Message<NotificationTask>| {
                 let state = state.clone();
                 async move {
+                    let notification = &message.data;
                     debug!("Processing notification for: {}", notification.recipient);
 
-                    match send_notification(&notification, &state).await {
+                    match send_notification(notification, &state).await {
                         Ok(_) => {
                             // Update statistics
                             let mut stats = state.stats.write().await;
@@ -393,16 +390,13 @@ async fn simulate_order_creation(
     };
 
     // Publish with production settings
-    let options = PublishOptions::builder()
-        .persistent(true) // Persist messages to disk
-        .mandatory(true) // Ensure message is routed
-        .immediate(false) // Don't require immediate consumer
-        .expiration(Duration::from_hours(24)) // Expire after 24 hours
-        .build();
+    let options = PublishOptions::new()
+        .mandatory() // Ensure message is routed
+        .with_expiration("86400000"); // Expire after 24 hours (in milliseconds)
 
     app_state
         .publisher
-        .publish_to_queue("order_events", &order, options)
+        .publish_to_queue("order_events", &order, Some(options))
         .await?;
 
     info!("Published order event: {}", order.order_id);
@@ -445,7 +439,7 @@ async fn process_order_event(
 
             app_state
                 .publisher
-                .publish_to_queue("notifications", &notification, PublishOptions::default())
+                .publish_to_queue("notifications", &notification, Some(PublishOptions::default()))
                 .await?;
 
             info!("Sent order creation notification for {}", order.order_id);
@@ -461,7 +455,7 @@ async fn process_order_event(
 
             app_state
                 .publisher
-                .publish_to_queue("notifications", &notification, PublishOptions::default())
+                .publish_to_queue("notifications", &notification, Some(PublishOptions::default()))
                 .await?;
 
             info!("Sent order completion notification for {}", order.order_id);
@@ -553,7 +547,13 @@ fn start_metrics_reporting(app_state: AppState) -> tokio::task::JoinHandle<()> {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let current_stats = app_state.stats.read().await.clone();
+                    let stats = app_state.stats.read().await;
+                    let current_stats = AppStats {
+                        orders_processed: stats.orders_processed,
+                        notifications_sent: stats.notifications_sent,
+                        errors_encountered: stats.errors_encountered,
+                        last_activity: stats.last_activity,
+                    };
 
                     // Calculate rates since last report
                     let orders_rate = current_stats.orders_processed.saturating_sub(last_stats.orders_processed);
