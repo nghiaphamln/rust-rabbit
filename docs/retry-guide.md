@@ -101,13 +101,12 @@ let config = RetryConfig::exponential_default()
 use rust_rabbit::{Consumer, RetryConfig};
 
 let consumer = Consumer::builder(connection, "order_queue")
-    .retry(RetryConfig::exponential_default())
-    .build()
-    .await?;
+    .with_retry(RetryConfig::exponential_default())
+    .build();
 
-consumer.consume(|order: Order| async move {
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
     // Process order
-    match process_order(order).await {
+    match process_order(msg.data).await {
         Ok(_) => Ok(()),      // Message will be ACKed
         Err(e) => Err(e),     // Message will be retried according to config
     }
@@ -176,7 +175,7 @@ let config = RetryConfig::exponential_default()
 ### 4. Error Classification
 
 ```rust
-consumer.consume(|order: Order| async move {
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
     match process_order(order).await {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -207,23 +206,22 @@ let retry_config = RetryConfig::exponential(
 );
 
 let consumer = Consumer::builder(connection, "order_processing")
-    .retry(retry_config)
+    .with_retry(retry_config)
     .concurrency(10)
-    .build()
-    .await?;
+    .build();
 
-consumer.consume(|order: Order| async move {
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
     // Try to process the order
-    match charge_payment(&order).await {
+    match charge_payment(&msg.data).await {
         Ok(_) => {
-            fulfill_order(&order).await?;
+            fulfill_order(&msg.data).await?;
             Ok(()) // Success - ACK
         }
         Err(PaymentError::TemporaryFailure(_)) => {
             Err("Payment temporarily unavailable".into()) // Retry
         }
         Err(PaymentError::InvalidCard(_)) => {
-            log::warn!("Invalid card for order {}", order.id);
+            log::warn!("Invalid card for order {}", msg.data.id);
             Ok(()) // Don't retry invalid cards
         }
     }
@@ -241,12 +239,11 @@ let api_retry = RetryConfig::custom(vec![
 ]);
 
 let consumer = Consumer::builder(connection, "api_calls")
-    .retry(api_retry)
-    .build()
-    .await?;
+    .with_retry(api_retry)
+    .build();
 
-consumer.consume(|request: ApiRequest| async move {
-    match external_api_call(&request).await {
+consumer.consume(|msg: rust_rabbit::Message<ApiRequest>| async move {
+    match external_api_call(&msg.data).await {
         Ok(response) => {
             store_response(response).await?;
             Ok(())
@@ -281,16 +278,16 @@ consumer.consume(|request: ApiRequest| async move {
 
 ```rust
 // Add logging to understand retry behavior
-consumer.consume(|order: Order| async move {
-    log::info!("Processing order {} (attempt {})", order.id, attempt);
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+    log::info!("Processing order {} (attempt {})", msg.data.id, attempt);
     
     match process_order(order).await {
         Ok(_) => {
-            log::info!("Order {} processed successfully", order.id);
+            log::info!("Order {} processed successfully", msg.data.id);
             Ok(())
         }
         Err(e) => {
-            log::warn!("Order {} failed: {} (will retry)", order.id, e);
+            log::warn!("Order {} failed: {} (will retry)", msg.data.id, e);
             Err(e)
         }
     }

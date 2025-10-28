@@ -77,12 +77,11 @@ struct Order {
 
 // Basic error handling with retry
 let consumer = Consumer::builder(connection, "orders")
-    .retry(RetryConfig::exponential_default())
-    .build()
-    .await?;
+    .with_retry(RetryConfig::exponential_default())
+    .build();
 
-consumer.consume(|order: Order| async move {
-    match process_order(order).await {
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+    match process_order(msg.data).await {
         Ok(_) => Ok(()),           // Success - message ACKed
         Err(e) => Err(e),         // Error - message retried according to config
     }
@@ -111,8 +110,8 @@ impl std::fmt::Display for ProcessingError {
 
 impl std::error::Error for ProcessingError {}
 
-consumer.consume(|order: Order| async move {
-    match process_order(order).await {
+consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
+    match process_order(msg.data).await {
         Ok(_) => Ok(()),
         Err(ProcessingError::Transient(msg)) => {
             log::warn!("Transient error, will retry: {}", msg);
@@ -225,7 +224,7 @@ let monitor_handle = tokio::spawn(monitor_connection(connection.clone()));
 ```rust
 use rust_rabbit::RetryConfig;
 
-consumer.consume(|message: Message| async move {
+consumer.consume(|msg: rust_rabbit::Message<Message>| async move {
     match process_message(message).await {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -267,11 +266,11 @@ let custom_retry = RetryConfig::custom(vec![
 ]);
 
 let consumer = Consumer::builder(connection, "api_calls")
-    .retry(custom_retry)
+    .with_retry(custom_retry)
     .build()
     .await?;
 
-consumer.consume(|request: ApiRequest| async move {
+consumer.consume(|msg: rust_rabbit::Message<ApiRequest>| async move {
     match external_api_call(&request).await {
         Ok(response) => {
             store_response(response).await?;
@@ -304,7 +303,7 @@ let dlq_consumer = Consumer::builder(connection, "orders.dlq")
     .build()
     .await?;
 
-dlq_consumer.consume(|failed_order: FailedOrder| async move {
+dlq_consumer.consume(|msg: rust_rabbit::Message<FailedOrder>| async move {
     log::error!("Processing failed order from DLQ: {:?}", failed_order);
     
     // Extract failure information from headers
@@ -375,13 +374,13 @@ use tracing::{error, warn, info, instrument};
 
 #[instrument(skip(order))]
 async fn process_order(order: Order) -> Result<(), ProcessingError> {
-    info!(order_id = order.id, "Processing order");
+    info!(order_id = msg.data.id, "Processing order");
     
-    match validate_order(&order).await {
-        Ok(_) => info!(order_id = order.id, "Order validated"),
+    match validate_order(&msg.data).await {
+        Ok(_) => info!(order_id = msg.data.id, "Order validated"),
         Err(e) => {
             error!(
-                order_id = order.id,
+                order_id = msg.data.id,
                 error = %e,
                 "Order validation failed"
             );
@@ -389,18 +388,18 @@ async fn process_order(order: Order) -> Result<(), ProcessingError> {
         }
     }
     
-    match charge_payment(&order).await {
-        Ok(_) => info!(order_id = order.id, "Payment charged"),
+    match charge_payment(&msg.data).await {
+        Ok(_) => info!(order_id = msg.data.id, "Payment charged"),
         Err(PaymentError::NetworkError(e)) => {
             warn!(
-                order_id = order.id,
+                order_id = msg.data.id,
                 error = %e,
                 "Payment network error, will retry"
             );
             return Err(ProcessingError::Transient(e.to_string()));
         }
         Err(PaymentError::InsufficientFunds) => {
-            error!(order_id = order.id, "Insufficient funds");
+            error!(order_id = msg.data.id, "Insufficient funds");
             return Err(ProcessingError::Permanent("Insufficient funds".to_string()));
         }
     }
@@ -577,7 +576,7 @@ consumer.consume(move |message: Message| {
 
 ```rust
 // Check error return - must return Err() to trigger retry
-consumer.consume(|message: Message| async move {
+consumer.consume(|msg: rust_rabbit::Message<Message>| async move {
     match process(message).await {
         Ok(_) => Ok(()),        // ✅ ACK message
         Err(e) => Err(e.into()) // ✅ Trigger retry

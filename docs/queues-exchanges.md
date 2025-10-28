@@ -31,10 +31,8 @@ use rust_rabbit::Consumer;
 
 // Auto-creates queue and exchange, binds them together
 let consumer = Consumer::builder(connection, "order_queue")
-    .bind_to_exchange("order_exchange")    // Creates exchange if needed
-    .routing_key("new.order")              // Custom routing key
-    .build()
-    .await?;
+    .bind_to_exchange("order_exchange", "new.order")    // Creates exchange if needed
+    .build();
 ```
 
 ## Exchange Types and Patterns
@@ -222,7 +220,7 @@ let rpc_consumer = Consumer::builder(connection, "rpc_queue")
     .build()
     .await?;
 
-rpc_consumer.consume(|request: RpcRequest| async move {
+rpc_consumer.consume(|msg: rust_rabbit::Message<RpcRequest>| async move {
     let response = process_request(request).await?;
     
     // Send response back (would need publisher access in real implementation)
@@ -335,7 +333,7 @@ let consumer = Consumer::builder(connection, "production_queue")
 ```rust
 // Automatic DLQ setup with retry
 let consumer = Consumer::builder(connection, "orders")
-    .retry(RetryConfig::exponential_default())  // Auto-creates orders.dlx/orders.dlq
+    .with_retry(RetryConfig::exponential_default())  // Auto-creates orders.dlx/orders.dlq
     .build()
     .await?;
 
@@ -345,7 +343,7 @@ let dlq_consumer = Consumer::builder(connection, "orders.dlq")
     .build()
     .await?;
 
-dlq_consumer.consume(|failed_message: FailedMessage| async move {
+dlq_consumer.consume(|msg: rust_rabbit::Message<FailedMessage>| async move {
     log::error!("Failed message: {:?}", failed_message);
     // Send alert, store for investigation, etc.
     Ok(())
@@ -366,7 +364,7 @@ for i in 0..4 {
         .await?;
     
     tokio::spawn(async move {
-        consumer.consume(|message: Task| async move {
+        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
             process_task(message).await
         }).await
     });
