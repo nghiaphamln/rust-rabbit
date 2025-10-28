@@ -3,7 +3,7 @@ use crate::{
     error::{RabbitError, Result},
     metrics::RustRabbitMetrics,
     publisher::{CustomExchangeDeclareOptions, CustomQueueDeclareOptions, Publisher},
-    retry::RetryPolicy,
+    retry::{DelayedMessageExchange, RetryPolicy},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -830,9 +830,6 @@ impl Consumer {
         options: &ConsumerOptions,
     ) -> Result<()> {
         if let Some(ref retry_policy) = options.retry_policy {
-            let connection = connection_manager.get_connection().await?;
-            let channel = connection.create_channel().await?;
-
             // Create delayed exchange name
             let delayed_exchange_name = format!(
                 "{}.retry",
@@ -842,84 +839,23 @@ impl Consumer {
                     .unwrap_or(&options.queue_name)
             );
 
-            // Declare delayed message exchange
-            let mut arguments = FieldTable::default();
-            arguments.insert(
-                "x-delayed-type".into(),
-                lapin::types::AMQPValue::LongString("direct".into()),
+            // Create DelayedMessageExchange instance and setup infrastructure
+            let delayed_exchange = DelayedMessageExchange::new(
+                connection_manager.clone(),
+                delayed_exchange_name.clone(),
+                retry_policy.clone(),
             );
 
-            let exchange_options = ExchangeDeclareOptions {
-                passive: false,
-                durable: true,
-                auto_delete: false,
-                internal: false,
-                nowait: false,
-            };
+            // Setup the delayed exchange and dead letter infrastructure
+            delayed_exchange.setup().await?;
 
-            channel
-                .exchange_declare(
-                    &delayed_exchange_name,
-                    ExchangeKind::Custom("x-delayed-message".to_string()),
-                    exchange_options,
-                    arguments,
-                )
-                .await?;
+            // Setup queue binding for retry mechanism
+            delayed_exchange.setup_queue_retry(&options.queue_name).await?;
 
             debug!(
-                "Setup delayed exchange for retries: {}",
-                delayed_exchange_name
+                "Setup retry infrastructure for queue: {} with delayed exchange: {}",
+                options.queue_name, delayed_exchange_name
             );
-
-            // Setup dead letter exchange if configured
-            if let Some(ref dle_name) = retry_policy.dead_letter_exchange {
-                let dle_options = ExchangeDeclareOptions {
-                    passive: false,
-                    durable: true,
-                    auto_delete: false,
-                    internal: false,
-                    nowait: false,
-                };
-
-                channel
-                    .exchange_declare(
-                        dle_name,
-                        ExchangeKind::Direct,
-                        dle_options,
-                        FieldTable::default(),
-                    )
-                    .await?;
-
-                debug!("Setup dead letter exchange: {}", dle_name);
-
-                // Setup dead letter queue if configured
-                if let Some(ref dlq_name) = retry_policy.dead_letter_queue {
-                    let dlq_options = LapinQueueDeclareOptions {
-                        passive: false,
-                        durable: true,
-                        exclusive: false,
-                        auto_delete: false,
-                        nowait: false,
-                    };
-
-                    channel
-                        .queue_declare(dlq_name, dlq_options, FieldTable::default())
-                        .await?;
-
-                    // Bind dead letter queue to dead letter exchange
-                    channel
-                        .queue_bind(
-                            dlq_name,
-                            dle_name,
-                            "dead-letter",
-                            QueueBindOptions::default(),
-                            FieldTable::default(),
-                        )
-                        .await?;
-
-                    debug!("Setup dead letter queue: {}", dlq_name);
-                }
-            }
         }
 
         Ok(())

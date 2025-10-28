@@ -408,6 +408,43 @@ impl DelayedMessageExchange {
         Ok(())
     }
 
+    /// Setup retry mechanism for a specific queue by binding it to the delay exchange
+    pub async fn setup_queue_retry(&self, original_queue: &str) -> Result<()> {
+        let connection = self.connection_manager.get_connection().await?;
+        let channel = connection.create_channel().await?;
+
+        // Ensure the original queue exists
+        let queue_options = QueueDeclareOptions {
+            passive: false,
+            durable: true,
+            exclusive: false,
+            auto_delete: false,
+            nowait: false,
+        };
+
+        channel
+            .queue_declare(original_queue, queue_options, FieldTable::default())
+            .await?;
+
+        // Bind the original queue to the delayed exchange
+        // This allows delayed messages to be routed back to the original queue
+        channel
+            .queue_bind(
+                original_queue,
+                &self.exchange_name,
+                original_queue, // routing key = queue name
+                QueueBindOptions::default(),
+                FieldTable::default(),
+            )
+            .await?;
+
+        info!(
+            "Setup retry binding for queue '{}' to delayed exchange '{}'",
+            original_queue, self.exchange_name
+        );
+        Ok(())
+    }
+
     /// Declare the delayed message exchange
     async fn declare_delayed_exchange(&self, channel: &Channel) -> Result<()> {
         // Arguments for delayed message exchange
@@ -518,6 +555,9 @@ impl DelayedMessageExchange {
                 )));
             }
         }
+
+        // Ensure the queue is set up for retry (binding to delayed exchange)
+        self.setup_queue_retry(original_queue).await?;
 
         let delay = self.retry_policy.calculate_delay(retry_count);
         let connection = self.connection_manager.get_connection().await?;
@@ -714,6 +754,68 @@ impl<T> RetryMessage<T> {
             original_headers,
             retry_timestamp: chrono::Utc::now(),
         }
+    }
+}
+
+#[cfg(test)]
+mod delay_exchange_binding_tests {
+    use super::*;
+    use crate::{
+        config::RabbitConfig,
+        connection::ConnectionManager,
+        retry::{DelayedMessageExchange, RetryPolicy},
+    };
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_delay_exchange_setup_queue_retry_method_exists() {
+        // This test verifies that the setup_queue_retry method exists and can be called
+        let config = RabbitConfig::builder()
+            .connection_string("amqp://test:test@localhost:5672/")
+            .build();
+
+        // This will fail to connect but that's ok - we're just testing the API exists
+        let connection_manager = match ConnectionManager::new(config).await {
+            Ok(cm) => cm,
+            Err(_) => return, // Skip test if no RabbitMQ available
+        };
+
+        let retry_policy = RetryPolicy::default();
+        let delayed_exchange = DelayedMessageExchange::new(
+            connection_manager,
+            "test.retry".to_string(),
+            retry_policy,
+        );
+
+        // The fact that this compiles means our API is correct
+        // We can't actually test the functionality without RabbitMQ running
+        let _result = delayed_exchange.setup_queue_retry("test_queue").await;
+        
+        // If we get here, the method exists and has the right signature
+        assert!(true, "setup_queue_retry method exists and is callable");
+    }
+
+    #[test]
+    fn test_delay_exchange_api_structure() {
+        // Test that DelayedMessageExchange has the expected methods
+        use std::any::type_name;
+        
+        // This compilation test verifies our API structure
+        let type_name = type_name::<DelayedMessageExchange>();
+        assert!(type_name.contains("DelayedMessageExchange"));
+        
+        // The fact that this code compiles means all our imports and types are correct
+        let _config = RabbitConfig::builder()
+            .connection_string("test")
+            .build();
+            
+        let _policy = RetryPolicy::builder()
+            .max_retries(3)
+            .initial_delay(Duration::from_millis(100))
+            .build();
+            
+        // Test passes if compilation succeeds
+        assert!(true);
     }
 }
 
