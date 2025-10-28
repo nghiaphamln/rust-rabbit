@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use tracing::{error, info, warn, Level};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct ProcessingTask {
     id: u32,
     task_type: String,
@@ -30,20 +30,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting exponential retry consumer...");
 
     let exponential_consumer = Consumer::builder(connection.clone(), "exponential_tasks")
-        .retry(RetryConfig::exponential_default()) // 1s→2s→4s→8s→16s (5 retries)
-        .concurrency(3)
-        .build()
-        .await?;
+        .with_retry(RetryConfig::exponential_default()) // 1s→2s→4s→8s→16s (5 retries)
+        .with_prefetch(3)
+        .build();
 
     let exp_handle = tokio::spawn(async move {
         exponential_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Exponential retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "exponential").await {
+                match simulate_task_processing(task, "exponential").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         warn!(
@@ -61,20 +61,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting linear retry consumer...");
 
     let linear_consumer = Consumer::builder(connection.clone(), "linear_tasks")
-        .retry(RetryConfig::linear(4, Duration::from_secs(10))) // 4 retries, 10s each
-        .concurrency(2)
-        .build()
-        .await?;
+        .with_retry(RetryConfig::linear(4, Duration::from_secs(10))) // 4 retries, 10s each
+        .with_prefetch(2)
+        .build();
 
     let linear_handle = tokio::spawn(async move {
         linear_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Linear retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "linear").await {
+                match simulate_task_processing(task, "linear").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         warn!(
@@ -95,25 +95,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(1),     // Quick first retry
         Duration::from_secs(5),     // Medium wait
         Duration::from_secs(30),    // Longer wait
-        Duration::from_minutes(2),  // Even longer wait
-        Duration::from_minutes(10), // Final attempt after 10 minutes
+        Duration::from_secs(120),  // Even longer wait
+        Duration::from_secs(600), // Final attempt after 10 minutes
     ]);
 
     let custom_consumer = Consumer::builder(connection.clone(), "custom_tasks")
-        .retry(custom_retry)
-        .concurrency(1) // Sequential processing for custom retry
-        .build()
-        .await?;
+        .with_retry(custom_retry)
+        .with_prefetch(1) // Sequential processing for custom retry
+        .build();
 
     let custom_handle = tokio::spawn(async move {
         custom_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Custom retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "custom").await {
+                match simulate_task_processing(task, "custom").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         warn!(
@@ -137,20 +137,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let fast_consumer = Consumer::builder(connection.clone(), "fast_tasks")
-        .retry(fast_retry)
-        .concurrency(5)
-        .build()
-        .await?;
+        .with_retry(fast_retry)
+        .with_prefetch(5)
+        .build();
 
     let fast_handle = tokio::spawn(async move {
         fast_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Fast retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "fast").await {
+                match simulate_task_processing(task, "fast").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         warn!("Fast task {} failed: {} (will retry quickly)", task.id, e);
@@ -167,24 +167,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conservative_retry = RetryConfig::exponential(
         2,                          // Only 2 retries
         Duration::from_secs(30),    // Start with 30 seconds
-        Duration::from_minutes(15), // Max 15 minutes
+        Duration::from_secs(900), // Max 15 minutes
     );
 
     let conservative_consumer = Consumer::builder(connection.clone(), "conservative_tasks")
-        .retry(conservative_retry)
-        .concurrency(1)
-        .build()
-        .await?;
+        .with_retry(conservative_retry)
+        .with_prefetch(1)
+        .build();
 
     let conservative_handle = tokio::spawn(async move {
         conservative_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Conservative retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "conservative").await {
+                match simulate_task_processing(task, "conservative").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         warn!(
@@ -202,17 +202,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting no-retry consumer...");
 
     let no_retry_consumer = Consumer::builder(connection.clone(), "no_retry_tasks")
-        .retry(RetryConfig::no_retry()) // Failed messages go directly to DLQ
-        .concurrency(3)
-        .build()
-        .await?;
+        .with_retry(RetryConfig::no_retry()) // Failed messages go directly to DLQ
+        .with_prefetch(3)
+        .build();
 
     let no_retry_handle = tokio::spawn(async move {
         no_retry_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!("No retry - Processing task {}: {}", task.id, task.task_type);
 
-                match simulate_task_processing(&task, "no_retry").await {
+                match simulate_task_processing(task, "no_retry").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         error!("No retry task {} failed: {} (going to DLQ)", task.id, e);
@@ -227,20 +227,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting selective retry consumer...");
 
     let selective_consumer = Consumer::builder(connection.clone(), "selective_tasks")
-        .retry(RetryConfig::exponential_default())
-        .concurrency(3)
-        .build()
-        .await?;
+        .with_retry(RetryConfig::exponential_default())
+        .with_prefetch(3)
+        .build();
 
     let selective_handle = tokio::spawn(async move {
         selective_consumer
-            .consume(|task: ProcessingTask| async move {
+            .consume(|message: rust_rabbit::Message<ProcessingTask>| async move {
+                let task = &message.data;
                 info!(
                     "Selective retry - Processing task {}: {}",
                     task.id, task.task_type
                 );
 
-                match simulate_task_processing(&task, "selective").await {
+                match simulate_task_processing(task, "selective").await {
                     Ok(_) => Ok(()),
                     Err(e) => {
                         // Classify errors to decide retry strategy

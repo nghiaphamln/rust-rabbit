@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use tracing::{error, info, warn, Level};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct Order {
     id: u32,
     customer_id: u32,
@@ -16,7 +16,7 @@ struct Order {
     status: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct Notification {
     recipient: String,
     subject: String,
@@ -38,14 +38,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting simple consumer...");
 
     let simple_consumer = Consumer::builder(connection.clone(), "simple_queue")
-        .concurrency(5) // Process up to 5 messages in parallel
-        .build()
-        .await?;
+        .with_prefetch(5) // Process up to 5 messages in parallel
+        .build();
 
     // Spawn simple consumer in background
     let simple_handle = tokio::spawn(async move {
         simple_consumer
-            .consume(|order: Order| async move {
+            .consume(|message: rust_rabbit::Message<Order>| async move {
+                let order = &message.data;
                 info!(
                     "Processing simple order: {} for customer {} (${:.2})",
                     order.id, order.customer_id, order.amount
@@ -70,14 +70,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting consumer with retry...");
 
     let retry_consumer = Consumer::builder(connection.clone(), "order_queue")
-        .retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s (5 retries)
-        .concurrency(3)
-        .build()
-        .await?;
+        .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s (5 retries)
+        .with_prefetch(3)
+        .build();
 
     let retry_handle = tokio::spawn(async move {
         retry_consumer
-            .consume(|order: Order| async move {
+            .consume(|message: rust_rabbit::Message<Order>| async move {
+                let order = &message.data;
                 info!(
                     "Processing order with retry: {} (${:.2})",
                     order.id, order.amount
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     _ => {
                         // Normal processing
-                        match process_order(order).await {
+                        match process_order(order.clone()).await {
                             Ok(_) => Ok(()),
                             Err(e) => Err(e),
                         }
@@ -113,23 +113,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting consumer with exchange binding...");
 
     let exchange_consumer = Consumer::builder(connection.clone(), "notification_queue")
-        .bind_to_exchange("notifications")
-        .routing_key("order.*") // Receive all order-related notifications
-        .retry(RetryConfig::linear(3, Duration::from_secs(5))) // 3 retries, 5s each
-        .concurrency(10)
-        .build()
-        .await?;
+        .bind_to_exchange("notifications", "order.*") // Receive all order-related notifications
+        .with_retry(RetryConfig::linear(3, Duration::from_secs(5))) // 3 retries, 5s each
+        .with_prefetch(10)
+        .build();
 
     let exchange_handle = tokio::spawn(async move {
         exchange_consumer
-            .consume(|notification: Notification| async move {
+            .consume(|message: rust_rabbit::Message<Notification>| async move {
+                let notification = &message.data;
                 info!(
                     "Processing notification: {} (priority: {})",
                     notification.subject, notification.priority
                 );
 
                 // Simulate notification processing
-                match send_notification(&notification).await {
+                match send_notification(notification).await {
                     Ok(_) => {
                         info!("Notification sent to {}", notification.recipient);
                         Ok(())
@@ -157,22 +156,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Duration::from_secs(1),    // First retry after 1 second
         Duration::from_secs(5),    // Second retry after 5 seconds
         Duration::from_secs(30),   // Third retry after 30 seconds
-        Duration::from_minutes(5), // Fourth retry after 5 minutes
+        Duration::from_secs(300), // Fourth retry after 5 minutes
     ]);
 
     let custom_consumer = Consumer::builder(connection.clone(), "api_calls")
-        .retry(custom_retry)
-        .concurrency(2)
-        .build()
-        .await?;
+        .with_retry(custom_retry)
+        .with_prefetch(2)
+        .build();
 
     let custom_handle = tokio::spawn(async move {
         custom_consumer
-            .consume(|request: serde_json::Value| async move {
+            .consume(|message: rust_rabbit::Message<serde_json::Value>| async move {
+                let request = &message.data;
                 info!("Processing API request: {:?}", request);
 
                 // Simulate API call processing
-                match external_api_call(&request).await {
+                match external_api_call(request).await {
                     Ok(response) => {
                         info!("API call successful: {:?}", response);
                         Ok(())
@@ -198,22 +197,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting batch consumer...");
 
     let batch_consumer = Consumer::builder(connection.clone(), "batch_orders")
-        .retry(RetryConfig::exponential(
+        .with_retry(RetryConfig::exponential(
             3,
             Duration::from_millis(500),
             Duration::from_secs(30),
         ))
-        .concurrency(1) // Process one batch at a time
-        .build()
-        .await?;
+        .with_prefetch(1) // Process one batch at a time
+        .build();
 
     let batch_handle = tokio::spawn(async move {
         batch_consumer
-            .consume(|order: Order| async move {
+            .consume(|message: rust_rabbit::Message<Order>| async move {
+                let order = &message.data;
                 info!("Processing batch order: {}", order.id);
 
                 // Simulate batch processing
-                match process_batch_order(order).await {
+                match process_batch_order(order.clone()).await {
                     Ok(_) => Ok(()),
                     Err(e) if is_retryable_error(&e) => {
                         warn!("Retryable batch error: {}", e);

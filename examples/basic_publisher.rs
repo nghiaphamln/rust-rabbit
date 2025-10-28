@@ -60,11 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let priority_options = PublishOptions::new()
-        .persistent(true) // Survive broker restart
-        .priority(9) // High priority (0-255)
-        .ttl(Duration::from_secs(300)) // 5 minutes TTL
-        .header("source", "web-api") // Custom header
-        .header("customer_tier", "premium"); // Another header
+        .with_priority(9) // High priority (0-255)
+        .with_expiration("300000"); // 5 minutes TTL in milliseconds
 
     publisher
         .publish_to_queue("order_queue", &priority_order, Some(priority_options))
@@ -96,8 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let urgent_options = PublishOptions::new()
-        .priority(9)
-        .header("alert_type", "high_value_order");
+        .with_priority(9);
 
     publisher
         .publish_to_exchange(
