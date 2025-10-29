@@ -1,6 +1,6 @@
 [package]
 name = "rust-rabbit"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 resolver = "2"
 description = "A simple, reliable RabbitMQ client library for Rust. Easy to use with flexible retry mechanisms and minimal configuration."
