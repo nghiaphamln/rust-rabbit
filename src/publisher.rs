@@ -1,4 +1,4 @@
-use crate::{connection::Connection, error::RustRabbitError, message::MessageEnvelope};
+use crate::{connection::Connection, error::RustRabbitError, message::{MessageEnvelope, WireMessage}};
 use lapin::{
     options::{BasicPublishOptions, ExchangeDeclareOptions, QueueDeclareOptions},
     types::FieldTable,
@@ -125,8 +125,14 @@ impl Publisher {
     where
         T: Serialize,
     {
+        // Wrap in WireMessage format
+        let wire_message = WireMessage {
+            data: message,
+            retry_attempt: 0,
+        };
+
         // Serialize message
-        let payload = serde_json::to_vec(message)
+        let payload = serde_json::to_vec(&wire_message)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
 
         // Build properties

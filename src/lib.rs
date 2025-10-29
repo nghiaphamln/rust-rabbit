@@ -152,7 +152,7 @@
 pub use connection::Connection;
 pub use consumer::{Consumer, ConsumerBuilder, Message};
 pub use error::{Result, RustRabbitError};
-pub use message::{ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource};
+pub use message::{ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource, WireMessage};
 pub use publisher::{PublishOptions, Publisher};
 pub use retry::{RetryConfig, RetryMechanism};
 
@@ -169,7 +169,7 @@ pub mod prelude {
     pub use crate::{
         Connection, Consumer, ConsumerBuilder, ErrorRecord, ErrorType, Message, MessageEnvelope,
         MessageMetadata, MessageSource, PublishOptions, Publisher, Result, RetryConfig,
-        RetryMechanism, RustRabbitError,
+        RetryMechanism, RustRabbitError, WireMessage,
     };
 }
 

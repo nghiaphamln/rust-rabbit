@@ -1,14 +1,14 @@
 use crate::{
     connection::Connection, 
     error::RustRabbitError, 
-    message::{ErrorType, MessageEnvelope},
+    message::{ErrorType, MessageEnvelope, WireMessage},
     retry::RetryConfig
 };
 use futures_lite::stream::StreamExt;
 use lapin::{
-    options::{BasicAckOptions, BasicConsumeOptions, QueueDeclareOptions},
-    types::FieldTable,
-    Channel,
+    options::{BasicAckOptions, BasicConsumeOptions, BasicPublishOptions, QueueDeclareOptions},
+    types::{FieldTable, AMQPValue},
+    BasicProperties, Channel,
 };
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -154,7 +154,6 @@ pub struct Consumer {
     queue_name: String,
     exchange_name: Option<String>,
     routing_key: Option<String>,
-    #[allow(dead_code)]
     retry_config: Option<RetryConfig>,
     prefetch_count: u16,
     auto_ack: bool,
@@ -166,10 +165,114 @@ impl Consumer {
         ConsumerBuilder::new(connection, queue_name)
     }
 
+    /// Create retry queue with TTL
+    async fn create_retry_queue(
+        &self,
+        channel: &Channel,
+        retry_attempt: u32,
+        delay: std::time::Duration,
+    ) -> Result<String, RustRabbitError> {
+        let retry_queue_name = format!("{}.retry.{}", self.queue_name, retry_attempt);
+        let delay_ms = delay.as_millis() as i64;
+        
+        // Create retry queue with TTL that routes back to original queue
+        let mut args = FieldTable::default();
+        args.insert("x-message-ttl".into(), AMQPValue::LongLongInt(delay_ms));
+        args.insert("x-dead-letter-exchange".into(), AMQPValue::LongString("".into())); // Default exchange
+        args.insert("x-dead-letter-routing-key".into(), AMQPValue::LongString(self.queue_name.clone().into()));
+        
+        channel
+            .queue_declare(
+                &retry_queue_name,
+                QueueDeclareOptions {
+                    durable: true,
+                    ..Default::default()
+                },
+                args,
+            )
+            .await?;
+            
+        debug!("Created retry queue: {} with TTL: {}ms", retry_queue_name, delay_ms);
+        Ok(retry_queue_name)
+    }
+
+    /// Create DLQ (Dead Letter Queue)
+    async fn create_dlq(&self, channel: &Channel) -> Result<String, RustRabbitError> {
+        let dlq_name = format!("{}.dlq", self.queue_name);
+        
+        channel
+            .queue_declare(
+                &dlq_name,
+                QueueDeclareOptions {
+                    durable: true,
+                    ..Default::default()
+                },
+                FieldTable::default(),
+            )
+            .await?;
+            
+        debug!("Created DLQ: {}", dlq_name);
+        Ok(dlq_name)
+    }
+
+    /// Send message to retry queue with delay
+    async fn send_to_retry_queue(
+        &self,
+        channel: &Channel,
+        message_data: &[u8],
+        retry_attempt: u32,
+        delay: std::time::Duration,
+    ) -> Result<(), RustRabbitError> {
+        let retry_queue_name = self.create_retry_queue(channel, retry_attempt, delay).await?;
+        
+        // Publish to retry queue
+        channel
+            .basic_publish(
+                "", // Default exchange
+                &retry_queue_name,
+                BasicPublishOptions::default(),
+                message_data,
+                BasicProperties::default()
+                    .with_content_type("application/json".into())
+                    .with_delivery_mode(2), // Persistent
+            )
+            .await?
+            .await?;
+            
+        debug!("Sent message to retry queue: {}", retry_queue_name);
+        Ok(())
+    }
+
+    /// Send message to DLQ
+    async fn send_to_dlq_simple(
+        &self,
+        channel: &Channel,
+        message_data: &[u8],
+    ) -> Result<(), RustRabbitError> {
+        let dlq_name = self.create_dlq(channel).await?;
+        
+        // Publish to DLQ
+        channel
+            .basic_publish(
+                "", // Default exchange
+                &dlq_name,
+                BasicPublishOptions::default(),
+                message_data,
+                BasicProperties::default()
+                    .with_content_type("application/json".into())
+                    .with_delivery_mode(2), // Persistent
+            )
+            .await?
+            .await?;
+            
+        debug!("Sent message to DLQ: {}", dlq_name);
+        Ok(())
+    }
+
     /// Start consuming messages
     pub async fn consume<T, H, Fut>(&self, handler: H) -> Result<(), RustRabbitError>
     where
-        T: DeserializeOwned + Send + Clone + Sync + 'static,
+        T: DeserializeOwned + Send + Clone + Sync + 'static + serde::Serialize,
         H: Fn(Message<T>) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
@@ -200,23 +303,33 @@ impl Consumer {
 
         debug!("Started consuming from queue: {}", self.queue_name);
 
-        // Process messages (simplified - no retry for now)
+        // Process messages
         while let Some(delivery_result) = consumer.next().await {
             let delivery = delivery_result?;
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let handler_clone = handler.clone();
             let auto_ack = self.auto_ack;
             let channel_clone = Arc::new(channel.clone());
+            let retry_config = self.retry_config.clone();
+            let consumer_self = Consumer {
+                connection: self.connection.clone(),
+                queue_name: self.queue_name.clone(),
+                exchange_name: self.exchange_name.clone(),
+                routing_key: self.routing_key.clone(),
+                retry_config: self.retry_config.clone(),
+                prefetch_count: self.prefetch_count,
+                auto_ack: self.auto_ack,
+            };
 
             tokio::spawn(async move {
                 let _permit = permit;
 
-                // Deserialize message
-                match serde_json::from_slice::<T>(&delivery.data) {
-                    Ok(data) => {
+                // Deserialize as WireMessage format
+                match serde_json::from_slice::<crate::message::WireMessage<T>>(&delivery.data) {
+                    Ok(wire_msg) => {
                         let message = Message {
-                            data,
-                            retry_attempt: 0, // Simplified for now
+                            data: wire_msg.data,
+                            retry_attempt: wire_msg.retry_attempt,
                             tag: delivery.delivery_tag,
                             channel: channel_clone.clone(),
                         };
@@ -234,9 +347,77 @@ impl Consumer {
                             Err(e) => {
                                 error!("Handler error: {}", e);
                                 if auto_ack {
-                                    // Simple reject without retry for now
-                                    if let Err(e) = message.nack(false).await {
-                                        error!("Failed to nack message: {}", e);
+                                    // Check if retry is configured
+                                    if let Some(retry_cfg) = &retry_config {
+                                        if message.retry_attempt < retry_cfg.max_retries {
+                                            // Calculate delay for next retry
+                                            if let Some(delay) = retry_cfg.calculate_delay(message.retry_attempt) {
+                                                warn!(
+                                                    "Scheduling retry {} with delay {:?} for message", 
+                                                    message.retry_attempt + 1, 
+                                                    delay
+                                                );
+                                                
+                                                // Update retry attempt in wire message
+                                                let wire_msg = WireMessage {
+                                                    data: message.data.clone(),
+                                                    retry_attempt: message.retry_attempt + 1,
+                                                };
+                                                
+                                                let retry_payload = match serde_json::to_vec(&wire_msg) {
+                                                    Ok(payload) => payload,
+                                                    Err(e) => {
+                                                        error!("Failed to serialize retry message: {}", e);
+                                                        if let Err(e) = message.nack(false).await {
+                                                            error!("Failed to nack message: {}", e);
+                                                        }
+                                                        return;
+                                                    }
+                                                };
+                                                
+                                                // Send to retry queue with delay
+                                                if let Err(e) = consumer_self.send_to_retry_queue(
+                                                    &channel_clone,
+                                                    &retry_payload,
+                                                    message.retry_attempt + 1,
+                                                    delay,
+                                                ).await {
+                                                    error!("Failed to send to retry queue: {}", e);
+                                                    if let Err(e) = message.nack(false).await {
+                                                        error!("Failed to nack message: {}", e);
+                                                    }
+                                                    return;
+                                                }
+                                                
+                                                // ACK original message (it's now in retry queue)
+                                                if let Err(e) = message.ack().await {
+                                                    error!("Failed to ack message after retry: {}", e);
+                                                }
+                                            } else {
+                                                // No more retries, send to DLQ
+                                                warn!("Retry exhausted, sending to DLQ");
+                                                if let Err(e) = consumer_self.send_to_dlq_simple(&channel_clone, &delivery.data).await {
+                                                    error!("Failed to send to DLQ: {}", e);
+                                                }
+                                                if let Err(e) = message.ack().await {
+                                                    error!("Failed to ack message after DLQ: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            // Retry exhausted, send to DLQ
+                                            warn!("Max retries reached, sending to DLQ");
+                                            if let Err(e) = consumer_self.send_to_dlq_simple(&channel_clone, &delivery.data).await {
+                                                error!("Failed to send to DLQ: {}", e);
+                                            }
+                                            if let Err(e) = message.ack().await {
+                                                error!("Failed to ack message after DLQ: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        // No retry config, just nack
+                                        if let Err(e) = message.nack(false).await {
+                                            error!("Failed to nack message: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -389,26 +570,79 @@ impl Consumer {
                                     if let Some(retry_cfg) = &retry_config_clone {
                                         if !envelope.is_retry_exhausted() {
                                             // Calculate delay and schedule retry
-                                            if let Some(_delay) = retry_cfg.calculate_delay(envelope.metadata.retry_attempt - 1) {
+                                            if let Some(delay) = retry_cfg.calculate_delay(envelope.metadata.retry_attempt) {
                                                 warn!(
-                                                    "Scheduling retry {} for envelope {} (simple requeue for now)",
-                                                    envelope.metadata.retry_attempt,
+                                                    "Scheduling retry {} for envelope {} with delay {:?}",
+                                                    envelope.metadata.retry_attempt + 1,
                                                     envelope.metadata.message_id,
+                                                    delay
                                                 );
                                                 
-                                                // TODO: Implement proper delay-based retry scheduling
-                                                // For now, just nack and requeue
-                                                if let Err(e) = channel_clone
-                                                    .basic_nack(
-                                                        delivery.delivery_tag,
-                                                        lapin::options::BasicNackOptions {
-                                                            multiple: false,
-                                                            requeue: true, // Simple requeue for now
-                                                        },
-                                                    )
-                                                    .await
-                                                {
-                                                    error!("Failed to nack message for retry: {}", e);
+                                                // Increment retry attempt in envelope
+                                                envelope.metadata.retry_attempt += 1;
+                                                
+                                                // Serialize updated envelope
+                                                match serde_json::to_vec(&envelope) {
+                                                    Ok(retry_payload) => {
+                                                        // Create consumer instance for access to methods
+                                                        let consumer_self = Consumer {
+                                                            connection: connection.clone(),
+                                                            queue_name: queue_name.clone(),
+                                                            exchange_name: None,
+                                                            routing_key: None,
+                                                            retry_config: retry_config_clone.clone(),
+                                                            prefetch_count: 10,
+                                                            auto_ack: true,
+                                                        };
+                                                        
+                                                        // Send to retry queue with delay
+                                                        if let Err(e) = consumer_self.send_to_retry_queue(
+                                                            &channel_clone,
+                                                            &retry_payload,
+                                                            envelope.metadata.retry_attempt,
+                                                            delay,
+                                                        ).await {
+                                                            error!("Failed to send envelope to retry queue: {}", e);
+                                                            // Fallback to simple nack
+                                                            if let Err(e) = channel_clone
+                                                                .basic_nack(
+                                                                    delivery.delivery_tag,
+                                                                    lapin::options::BasicNackOptions {
+                                                                        multiple: false,
+                                                                        requeue: false,
+                                                                    },
+                                                                )
+                                                                .await
+                                                            {
+                                                                error!("Failed to nack message: {}", e);
+                                                            }
+                                                            return;
+                                                        }
+                                                        
+                                                        // ACK original message (it's now in retry queue)
+                                                        if let Err(e) = channel_clone
+                                                            .basic_ack(delivery.delivery_tag, BasicAckOptions::default())
+                                                            .await
+                                                        {
+                                                            error!("Failed to ack message after retry: {}", e);
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        error!("Failed to serialize envelope for retry: {}", e);
+                                                        // Fallback to simple nack
+                                                        if let Err(e) = channel_clone
+                                                            .basic_nack(
+                                                                delivery.delivery_tag,
+                                                                lapin::options::BasicNackOptions {
+                                                                    multiple: false,
+                                                                    requeue: false,
+                                                                },
+                                                            )
+                                                            .await
+                                                        {
+                                                            error!("Failed to nack message: {}", e);
+                                                        }
+                                                    }
                                                 }
                                             } else {
                                                 // No more retries, send to DLQ

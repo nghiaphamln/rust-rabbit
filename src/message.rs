@@ -10,6 +10,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Simple wire message format for basic publish/consume
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireMessage<T> {
+    pub data: T,
+    pub retry_attempt: u32,
+}
+
 /// Message envelope that wraps the actual payload with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageEnvelope<T> {
