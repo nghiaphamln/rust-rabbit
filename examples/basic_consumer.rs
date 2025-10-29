@@ -57,7 +57,7 @@ fn start_simple_consumer(
 ) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "simple_orders")
-            .concurrency(5)
+            .with_prefetch(5)
             .build();
 
         consumer
@@ -91,7 +91,7 @@ fn start_retry_consumer(
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "retry_orders")
             .with_retry(RetryConfig::exponential_default()) // 1s→2s→4s→8s→16s
-            .concurrency(3)
+            .with_prefetch(3)
             .build();
 
         consumer
@@ -134,7 +134,7 @@ fn start_exchange_consumer(
         let consumer = Consumer::builder(connection, "notifications")
             .bind_to_exchange("notifications", "order.*")
             .with_retry(RetryConfig::linear(2, Duration::from_secs(5)))
-            .concurrency(10)
+            .with_prefetch(10)
             .build();
 
         consumer
@@ -175,7 +175,7 @@ fn start_manual_ack_consumer(
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "manual_orders")
             .manual_ack() // Disable auto-acknowledge
-            .concurrency(2)
+            .with_prefetch(2)
             .build();
 
         consumer

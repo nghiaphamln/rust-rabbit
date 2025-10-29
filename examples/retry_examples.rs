@@ -46,7 +46,7 @@ fn start_exponential_consumer(
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "exponential_tasks")
             .with_retry(RetryConfig::exponential_default())
-            .concurrency(3)
+            .with_prefetch(3)
             .build();
 
         consumer
@@ -68,7 +68,7 @@ fn start_linear_consumer(
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "linear_tasks")
             .with_retry(RetryConfig::linear(3, Duration::from_secs(10)))
-            .concurrency(2)
+            .with_prefetch(2)
             .build();
 
         consumer
@@ -97,7 +97,7 @@ fn start_custom_consumer(
 
         let consumer = Consumer::builder(connection, "custom_tasks")
             .with_retry(custom_retry)
-            .concurrency(2)
+            .with_prefetch(2)
             .build();
 
         consumer
@@ -119,7 +119,7 @@ fn start_no_retry_consumer(
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "no_retry_tasks")
             .with_retry(RetryConfig::no_retry())
-            .concurrency(5)
+            .with_prefetch(5)
             .build();
 
         consumer

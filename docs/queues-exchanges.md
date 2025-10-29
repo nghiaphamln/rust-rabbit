@@ -162,12 +162,12 @@ for task in tasks {
 
 // Multiple workers compete for tasks
 let worker1 = Consumer::builder(connection, "task_queue")
-    .concurrency(1)                        // One task at a time per worker
+    .with_prefetch(1)                        // One task at a time per worker
     .build()
     .await?;
 
 let worker2 = Consumer::builder(connection, "task_queue")
-    .concurrency(1)
+    .with_prefetch(1)
     .build()
     .await?;
 ```
@@ -359,7 +359,7 @@ dlq_consumer.consume(|msg: rust_rabbit::Message<FailedMessage>| async move {
 for i in 0..4 {
     let queue_name = format!("worker_queue_{}", i);
     let consumer = Consumer::builder(connection.clone(), &queue_name)
-        .concurrency(10)
+        .with_prefetch(10)
         .build()
         .await?;
     
@@ -376,13 +376,13 @@ for i in 0..4 {
 ```rust
 // High throughput: Higher concurrency
 let high_throughput = Consumer::builder(connection, "fast_queue")
-    .concurrency(50)                       // Process many messages in parallel
+    .with_prefetch(50)                       // Process many messages in parallel
     .build()
     .await?;
 
 // Reliable processing: Lower concurrency  
 let reliable = Consumer::builder(connection, "important_queue")
-    .concurrency(1)                        // One at a time for reliability
+    .with_prefetch(1)                        // One at a time for reliability
     .build()
     .await?;
 ```
@@ -429,7 +429,7 @@ struct LargeMessageRef {
    ```rust
    // Ensure proper concurrency settings
    let consumer = Consumer::builder(connection, "queue")
-       .concurrency(1)                        // Process one at a time if needed
+       .with_prefetch(1)                        // Process one at a time if needed
        .build()
        .await?;
    ```

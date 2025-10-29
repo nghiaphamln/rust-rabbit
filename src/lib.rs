@@ -45,9 +45,9 @@
 //!
 //! ```rust,no_run
 //! use rust_rabbit::{Connection, Consumer, RetryConfig};
-//! use serde::Deserialize;
+//! use serde::{Deserialize, Serialize};
 //!
-//! #[derive(Deserialize, Clone)]
+//! #[derive(Serialize, Deserialize, Clone)]
 //! struct Order {
 //!     id: u32,
 //!     amount: f64,
@@ -60,7 +60,7 @@
 //!     let consumer = Consumer::builder(connection, "order_queue")
 //!         .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
 //!         .bind_to_exchange("orders", "order.*")
-//!         .concurrency(5)
+//!         .with_prefetch(5)
 //!         .build();
 //!     
 //!     consumer.consume(|msg: rust_rabbit::Message<Order>| async move {

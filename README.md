@@ -21,7 +21,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rust-rabbit = "1.0"
+rust-rabbit = "1.1"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -62,9 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 use rust_rabbit::{Connection, Consumer, RetryConfig};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Order {
     id: u32,
     amount: f64,
@@ -76,8 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let consumer = Consumer::builder(connection, "order_queue")
         .with_retry(RetryConfig::exponential_default()) // 1s->2s->4s->8s->16s
-        .bind_to_exchange("orders", "order.*")
-        .concurrency(5)
+        .bind_to_exchange("orders", "new.order")
+        .with_prefetch(5)
         .build();
     
     consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
@@ -200,6 +200,15 @@ let retry_config = RetryConfig::exponential_default()
        .with_retry(retry_config)
        .build();
    ```
+
+**⚠️ Important: Plugin is Required**
+
+If you use `DelayStrategy::DelayedExchange` without installing the plugin on RabbitMQ:
+- Your application will crash when trying to send messages to the delay exchange
+- The delay exchange declaration will fail
+- You'll get an error like: `NOT_FOUND - operation not permitted on this exchange`
+
+**Always ensure the `rabbitmq_delayed_message_exchange` plugin is installed and enabled before deploying code that uses `DelayStrategy::DelayedExchange`.**
 
 **Pros:**
 - More precise timing (microsecond-level)
@@ -377,7 +386,7 @@ publisher.publish_to_queue("orders", &message, Some(options)).await?;
 let consumer = Consumer::builder(connection, "order_queue")
     .with_retry(RetryConfig::exponential_default())
     .bind_to_exchange("order_exchange", "new.order")  // Exchange binding with routing key
-    .concurrency(10)                     // Process 10 messages in parallel
+    .with_prefetch(10)                     // Process 10 messages in parallel
     .build();
 ```
 
@@ -441,7 +450,7 @@ let consumer = Consumer::new(connection_manager, ConsumerOptions {
 // NEW (v1.0) - Simple  
 let consumer = Consumer::builder(connection, "queue")
     .with_retry(RetryConfig::exponential_default())
-    .concurrency(10)
+    .with_prefetch(10)
     .build();
 ```
 

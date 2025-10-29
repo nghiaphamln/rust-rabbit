@@ -72,7 +72,7 @@ async fn start_order_processor(
 ) -> Result<()> {
     let consumer = Consumer::builder(connection, "orders")
         .with_retry(RetryConfig::exponential_default())
-        .concurrency(10)
+        .with_prefetch(10)
         .build();
 
     consumer
@@ -114,7 +114,7 @@ async fn start_notification_processor(
     let consumer = Consumer::builder(connection, "notifications")
         .bind_to_exchange("notifications", "notification.*")
         .with_retry(RetryConfig::linear(3, Duration::from_secs(5)))
-        .concurrency(15)
+        .with_prefetch(15)
         .build();
 
     consumer

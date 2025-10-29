@@ -2,10 +2,16 @@
 //!
 //! This example shows how to use the DelayedExchange strategy for retrying failed messages.
 //!
-//! **Requirements**: This example requires the `rabbitmq_delayed_message_exchange` plugin:
-//! - Download: https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases
-//! - Install: Place the .ez file in RabbitMQ plugins directory and enable
-//! - RabbitMQ CLI: `rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
+//! **⚠️ CRITICAL REQUIREMENT**: This example REQUIRES the `rabbitmq_delayed_message_exchange` plugin.
+//! Without it, the application will crash when trying to send messages to the delay exchange.
+//!
+//! **Setup Steps**:
+//! 1. Download: https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases
+//! 2. Install: Place the .ez file in RabbitMQ plugins directory
+//! 3. Enable plugin: `rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
+//! 4. Restart RabbitMQ: `systemctl restart rabbitmq-server` (or appropriate OS command)
+//!
+//! **If plugin is not installed**, you'll get error: `NOT_FOUND - operation not permitted on this exchange`
 //!
 //! **Flow**:
 //! 1. Consumer receives message from queue
@@ -130,7 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// **Scenario 2: Success After Retry**
 /// - Task arrives in queue
 /// - Handler fails (attempt 1)
-/// - Message published to delay exchange with 2s delay
+/// - Message published to delay exchange with exponential backoff (2s base, 30s max)
 /// - After 2s, message requeued to task_queue
 /// - Handler processes successfully (attempt 2)
 /// - ✓ Done (1 retry used)

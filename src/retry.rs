@@ -55,6 +55,14 @@ pub enum DelayStrategy {
     /// TTL-based delays using temporary queues (no plugin required)
     TTL,
     /// RabbitMQ delayed message exchange plugin (requires x-delayed-message plugin)
+    ///
+    /// ⚠️ **IMPORTANT**: Using this strategy without the `rabbitmq_delayed_message_exchange` plugin
+    /// will cause your application to crash with "NOT_FOUND - operation not permitted on this exchange" error.
+    ///
+    /// Before deploying code with `DelayedExchange`, ensure:
+    /// 1. Plugin is installed: https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases
+    /// 2. Plugin is enabled: `rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
+    /// 3. RabbitMQ is restarted after plugin installation
     DelayedExchange,
 }
 

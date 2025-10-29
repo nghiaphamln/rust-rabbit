@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     ├─ SUCCESS? → ACK message (done) ✓
 ///     └─ FAIL? → Retry logic triggered
 ///         ├─ Retry attempt < max_retries?
-///         │   └─ YES → Send to retry queue (e.g., 2s delay)
+///         │   └─ YES → Send to retry queue (exponential backoff: 1s→2s→4s→8s→16s)
 ///         │       ↓
 ///         │   After delay, message returns to original queue
 ///         │       ↓

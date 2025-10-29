@@ -56,7 +56,7 @@ async fn order_service_example() -> Result<(), Box<dyn std::error::Error>> {
     // Listen for commands
     let consumer = Consumer::builder(bus.connection.clone(), "order.commands")
         .with_retry(RetryConfig::exponential_default())
-        .concurrency(10)
+        .with_prefetch(10)
         .build();
     
     consumer.consume(|msg: rust_rabbit::Message<OrderCommand>| async move {
@@ -141,7 +141,7 @@ async fn setup_event_handlers(connection: Arc<Connection>) -> Result<(), Box<dyn
         .bind_to_exchange("domain.events")
         .routing_key("#") // All events
         .with_retry(RetryConfig::exponential_default())
-        .concurrency(20)
+        .with_prefetch(20)
         .build();
     
     tokio::spawn(async move {
@@ -280,7 +280,7 @@ struct HighThroughputConsumer {
 impl HighThroughputConsumer {
     async fn new(connection: Arc<Connection>, queue: &str, concurrency: usize) -> Result<Self, Box<dyn std::error::Error>> {
         let consumer = Consumer::builder(connection, queue)
-            .concurrency(concurrency)
+            .with_prefetch(concurrency as u16)
             .with_retry(RetryConfig::exponential(3, Duration::from_millis(100), Duration::from_secs(10)))
             .build()
             .await?;

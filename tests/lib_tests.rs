@@ -369,7 +369,7 @@ mod mock_api_tests {
             .with_retry(RetryConfig::exponential_default())
             .bind_to_exchange("test_exchange", "routing.key")
             .routing_key("test.route")
-            .concurrency(5)
+            .with_prefetch(5)
             .build();
 
         // Just test that it compiles

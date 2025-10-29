@@ -207,7 +207,7 @@ let retry_config = RetryConfig::exponential(
 
 let consumer = Consumer::builder(connection, "order_processing")
     .with_retry(retry_config)
-    .concurrency(10)
+    .with_prefetch(10)
     .build();
 
 consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
