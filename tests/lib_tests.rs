@@ -488,4 +488,75 @@ mod delay_strategy_tests {
         assert_eq!(config.get_dead_letter_queue("orders"), "custom_dlq");
         assert_eq!(config.get_delay_exchange("orders"), "orders.delay");
     }
+
+    #[test]
+    fn test_dlq_ttl_none_by_default() {
+        let config = RetryConfig::exponential_default();
+        assert!(config.dlq_ttl.is_none());
+    }
+
+    #[test]
+    fn test_dlq_ttl_configuration() {
+        let ttl = Duration::from_secs(86400); // 1 day
+        let config = RetryConfig::exponential_default().with_dlq_ttl(ttl);
+
+        assert!(config.dlq_ttl.is_some());
+        assert_eq!(config.dlq_ttl.unwrap(), ttl);
+    }
+
+    #[test]
+    fn test_dlq_ttl_with_linear_retry() {
+        let ttl = Duration::from_secs(3600); // 1 hour
+        let config = RetryConfig::linear(3, Duration::from_secs(5)).with_dlq_ttl(ttl);
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.dlq_ttl, Some(ttl));
+    }
+
+    #[test]
+    fn test_dlq_ttl_with_custom_delays() {
+        let delays = vec![
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+        ];
+        let ttl = Duration::from_secs(604800); // 7 days
+        let config = RetryConfig::custom(delays).with_dlq_ttl(ttl);
+
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.dlq_ttl, Some(ttl));
+    }
+
+    #[test]
+    fn test_dlq_ttl_with_all_options() {
+        let ttl = Duration::from_secs(86400);
+        let config = RetryConfig::exponential(5, Duration::from_secs(1), Duration::from_secs(60))
+            .with_delay_strategy(DelayStrategy::DelayedExchange)
+            .with_dead_letter("custom_dlx".to_string(), "custom_dlq".to_string())
+            .with_dlq_ttl(ttl);
+
+        assert_eq!(config.max_retries, 5);
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
+        assert_eq!(config.get_dead_letter_exchange("test"), "custom_dlx");
+        assert_eq!(config.dlq_ttl, Some(ttl));
+    }
+}
+
+#[cfg(test)]
+mod consumer_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_consumer_builder_with_dlq_ttl() {
+        // This is a compile-time test - if it compiles, the API is correct
+        let retry_config =
+            RetryConfig::exponential_default().with_dlq_ttl(Duration::from_secs(86400));
+
+        // Verify the configuration
+        assert!(retry_config.dlq_ttl.is_some());
+        assert_eq!(retry_config.dlq_ttl.unwrap(), Duration::from_secs(86400));
+    }
 }

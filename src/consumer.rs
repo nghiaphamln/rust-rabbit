@@ -13,6 +13,7 @@ use lapin::{
 use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, warn};
 
@@ -122,6 +123,23 @@ impl ConsumerBuilder {
         self
     }
 
+    /// Set TTL for dead letter queue (auto-cleanup failed messages)
+    /// This is a convenience method that modifies the retry_config if it exists
+    ///
+    /// # Example
+    /// ```ignore
+    /// let consumer = Consumer::builder(connection, "orders")
+    ///     .with_retry(RetryConfig::exponential_default())
+    ///     .with_dlq_ttl(Duration::from_secs(86400))  // 1 day
+    ///     .build();
+    /// ```
+    pub fn with_dlq_ttl(mut self, ttl: Duration) -> Self {
+        if let Some(retry_config) = self.retry_config.as_mut() {
+            retry_config.dlq_ttl = Some(ttl);
+        }
+        self
+    }
+
     /// Set prefetch count
     pub fn with_prefetch(mut self, count: u16) -> Self {
         self.prefetch_count = Some(count);
@@ -205,9 +223,19 @@ impl Consumer {
         Ok(retry_queue_name)
     }
 
-    /// Create DLQ (Dead Letter Queue)
+    /// Create DLQ (Dead Letter Queue) with optional TTL
     async fn create_dlq(&self, channel: &Channel) -> Result<String, RustRabbitError> {
         let dlq_name = format!("{}.dlq", self.queue_name);
+
+        // Build queue arguments with optional TTL
+        let mut args = FieldTable::default();
+        if let Some(retry_config) = &self.retry_config {
+            if let Some(ttl) = &retry_config.dlq_ttl {
+                let ttl_ms = ttl.as_millis() as i64;
+                args.insert("x-message-ttl".into(), AMQPValue::LongLongInt(ttl_ms));
+                debug!("DLQ TTL: {}ms", ttl_ms);
+            }
+        }
 
         channel
             .queue_declare(
@@ -216,7 +244,7 @@ impl Consumer {
                     durable: true,
                     ..Default::default()
                 },
-                FieldTable::default(),
+                args,
             )
             .await?;
 

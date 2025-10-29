@@ -242,6 +242,59 @@ DelayedExchange Strategy Flow:
 
 See [delayed_exchange_example.rs](examples/delayed_exchange_example.rs) for a complete working example.
 
+## 🗑️ **Dead Letter Queue (DLQ) with Auto-Cleanup**
+
+For failed messages that exceed max retries, rust-rabbit automatically sends them to a Dead Letter Queue (DLQ). Now you can set automatic cleanup with TTL:
+
+```rust
+let retry_config = RetryConfig::exponential_default()
+    .with_dlq_ttl(Duration::from_secs(86400));  // Auto-cleanup after 1 day
+
+let consumer = Consumer::builder(connection, "orders")
+    .with_retry(retry_config)
+    .build();
+```
+
+**Flow:**
+```
+Original Queue (orders)
+    ↓
+Retries exhausted
+    ↓
+Message → DLQ (orders.dlq) [TTL: 86400s]
+    ↓
+After 1 day: Message auto-deleted by RabbitMQ
+    ↓
+✓ No manual cleanup needed!
+```
+
+**Configuration Options:**
+
+```rust
+use std::time::Duration;
+
+// 1 hour (fresh failed messages)
+.with_dlq_ttl(Duration::from_secs(3600))
+
+// 1 day (default retention)
+.with_dlq_ttl(Duration::from_secs(86400))
+
+// 1 week (long retention for analysis)
+.with_dlq_ttl(Duration::from_secs(604800))
+
+// No TTL (manual cleanup only - default)
+// Don't call .with_dlq_ttl()
+```
+
+**Monitoring DLQ:**
+1. Open RabbitMQ Management: http://localhost:15672
+2. Go to "Queues" tab
+3. Find "orders.dlq" queue
+4. Check "x-message-ttl" in queue details
+5. Monitor "Message count" to see failed messages
+
+See [dlq_ttl_example.rs](examples/dlq_ttl_example.rs) for complete example.
+
 ## ⚙️ **Advanced Features**
 
 ### MessageEnvelope System
@@ -345,6 +398,7 @@ See the [`examples/`](examples/) directory for complete working examples:
 - **[Basic Consumer](examples/basic_consumer.rs)** - Simple message consumption  
 - **[Retry Examples](examples/retry_examples.rs)** - Different retry configurations
 - **[Delayed Exchange Example](examples/delayed_exchange_example.rs)** - Using rabbitmq_delayed_message_exchange plugin
+- **[DLQ TTL Example](examples/dlq_ttl_example.rs)** - Auto-cleanup Dead Letter Queue with TTL
 - **[Production Setup](examples/production_setup.rs)** - Production-ready configuration
 
 ## 🧪 **Testing**

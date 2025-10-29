@@ -103,6 +103,11 @@ pub struct RetryConfig {
     /// Dead letter queue for permanently failed messages
     /// If None, uses default: "{queue_name}.dlq"
     pub dead_letter_queue: Option<String>,
+
+    /// TTL for dead letter queue (auto-cleanup failed messages after this duration)
+    /// If set, messages in DLQ will be automatically removed after TTL expires
+    /// Example: Duration::from_secs(86400) = 1 day
+    pub dlq_ttl: Option<Duration>,
 }
 
 impl RetryConfig {
@@ -117,6 +122,7 @@ impl RetryConfig {
             delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
+            dlq_ttl: None,
         }
     }
 
@@ -131,6 +137,7 @@ impl RetryConfig {
             delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
+            dlq_ttl: None,
         }
     }
 
@@ -142,6 +149,7 @@ impl RetryConfig {
             delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
+            dlq_ttl: None,
         }
     }
 
@@ -154,6 +162,7 @@ impl RetryConfig {
             delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
+            dlq_ttl: None,
         }
     }
 
@@ -167,6 +176,7 @@ impl RetryConfig {
             delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
+            dlq_ttl: None,
         }
     }
 
@@ -180,6 +190,19 @@ impl RetryConfig {
     /// Set delay strategy to use (TTL or DelayedExchange)
     pub fn with_delay_strategy(mut self, strategy: DelayStrategy) -> Self {
         self.delay_strategy = strategy;
+        self
+    }
+
+    /// Set TTL for dead letter queue (auto-cleanup failed messages)
+    /// Messages in DLQ will be automatically removed after this duration
+    ///
+    /// # Example
+    /// ```ignore
+    /// let config = RetryConfig::exponential_default()
+    ///     .with_dlq_ttl(Duration::from_secs(86400));  // 1 day
+    /// ```
+    pub fn with_dlq_ttl(mut self, ttl: Duration) -> Self {
+        self.dlq_ttl = Some(ttl);
         self
     }
 
