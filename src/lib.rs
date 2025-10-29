@@ -131,8 +131,8 @@
 //!         .build();
 //!     
 //!     consumer.consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
-//!         println!("Processing order {} (attempt {})", 
-//!                  envelope.payload.id, 
+//!         println!("Processing order {} (attempt {})",
+//!                  envelope.payload.id,
 //!                  envelope.metadata.retry_attempt + 1);
 //!         
 //!         // Access retry metadata
@@ -152,7 +152,9 @@
 pub use connection::Connection;
 pub use consumer::{Consumer, ConsumerBuilder, Message};
 pub use error::{Result, RustRabbitError};
-pub use message::{ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource, WireMessage};
+pub use message::{
+    ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource, WireMessage,
+};
 pub use publisher::{PublishOptions, Publisher};
 pub use retry::{RetryConfig, RetryMechanism};
 

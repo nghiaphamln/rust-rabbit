@@ -3,9 +3,7 @@
 //! This example shows how to use the new MessageEnvelope system for
 //! publishing and consuming messages with built-in retry metadata.
 
-use rust_rabbit::{
-    Connection, Consumer, MessageEnvelope, Publisher, RetryConfig,
-};
+use rust_rabbit::{Connection, Consumer, MessageEnvelope, Publisher, RetryConfig};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,9 +25,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Publishing with envelope
     println!("\n📤 Publishing messages with envelopes...");
-    
+
     let publisher = Publisher::new(connection.clone());
-    
+
     let order = Order {
         id: 1001,
         customer_id: 123,
@@ -41,28 +39,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     publisher
         .publish_with_envelope_to_queue("order_queue", &order, 5, None)
         .await?;
-    
-    println!("✅ Published order {} with envelope (max 5 retries)", order.id);
+
+    println!(
+        "✅ Published order {} with envelope (max 5 retries)",
+        order.id
+    );
 
     // Example 2: Manual envelope creation
     let envelope = MessageEnvelope::new(order.clone(), "order_queue")
         .with_max_retries(3)
         .with_header("source", "api-server")
         .with_header("priority", "high");
-    
+
     publisher
         .publish_envelope_to_queue("priority_orders", &envelope, None)
         .await?;
-    
+
     println!("✅ Published priority order with custom envelope");
 
     // Example 3: Consuming with envelope support
     println!("\n📥 Starting envelope consumer...");
-    
+
     let consumer = Consumer::builder(connection, "order_queue")
-        .with_retry(RetryConfig::exponential(3, 
-            std::time::Duration::from_secs(1), 
-            std::time::Duration::from_secs(30)
+        .with_retry(RetryConfig::exponential(
+            3,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(30),
         ))
         .with_prefetch(5)
         .build();
@@ -71,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     consumer
         .consume_envelopes(|envelope: MessageEnvelope<Order>| async move {
             let order = &envelope.payload;
-            
+
             println!(
                 "🔄 Processing order {} (attempt {}/{}, id: {})",
                 order.id,
@@ -90,18 +92,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Permanent error - don't retry
                     Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        "Invalid order data - validation failed"
-                    ).into())
+                        "Invalid order data - validation failed",
+                    )
+                    .into())
                 }
                 "network_error" => {
                     // Transient error - will retry
                     Err(std::io::Error::new(
                         std::io::ErrorKind::ConnectionRefused,
-                        "Network timeout - external service unavailable"
-                    ).into())
+                        "Network timeout - external service unavailable",
+                    )
+                    .into())
                 }
                 _ => {
-                    println!("✅ Order {} processed with status: {}", order.id, order.status);
+                    println!(
+                        "✅ Order {} processed with status: {}",
+                        order.id, order.status
+                    );
                     Ok(())
                 }
             }
@@ -137,7 +144,7 @@ mod tests {
         assert!(envelope.is_first_attempt());
     }
 
-    #[test] 
+    #[test]
     fn test_error_tracking() {
         let order = Order {
             id: 123,
@@ -153,11 +160,11 @@ mod tests {
 
         assert_eq!(envelope.metadata.retry_attempt, 2);
         assert_eq!(envelope.metadata.error_history.len(), 2);
-        
+
         let last_error = envelope.last_error().unwrap();
         assert_eq!(last_error.error, "Second error");
         assert_eq!(last_error.attempt, 1);
-        
+
         let failure_summary = envelope.get_failure_summary();
         assert!(failure_summary.contains("failed after 2 attempts"));
         assert!(failure_summary.contains("Second error"));

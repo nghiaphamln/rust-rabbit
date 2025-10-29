@@ -1,4 +1,8 @@
-use crate::{connection::Connection, error::RustRabbitError, message::{MessageEnvelope, WireMessage}};
+use crate::{
+    connection::Connection,
+    error::RustRabbitError,
+    message::{MessageEnvelope, WireMessage},
+};
 use lapin::{
     options::{BasicPublishOptions, ExchangeDeclareOptions, QueueDeclareOptions},
     types::FieldTable,

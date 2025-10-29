@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
     // Start all retry pattern consumers
-    let _handles = vec![
+    let _handles = [
         start_exponential_consumer(connection.clone()),
         start_linear_consumer(connection.clone()),
         start_custom_consumer(connection.clone()),
@@ -32,10 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("✅ All consumers started. Press Ctrl+C to stop.");
 
-    // Wait for Ctrl+C  
+    // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
     info!("Received shutdown signal, stopping consumers...");
-    
+
     Ok(())
 }
 
@@ -49,12 +49,15 @@ fn start_exponential_consumer(
             .concurrency(3)
             .build();
 
-        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
-            let task = &msg.data;
-            info!("📈 Exponential - Processing task {}", task.id);
-            
-            simulate_work(&task, "exponential").await
-        }).await.map_err(|e| e.into())
+        consumer
+            .consume(|msg: rust_rabbit::Message<Task>| async move {
+                let task = &msg.data;
+                info!("📈 Exponential - Processing task {}", task.id);
+
+                simulate_work(task, "exponential").await
+            })
+            .await
+            .map_err(|e| e.into())
     })
 }
 
@@ -68,12 +71,15 @@ fn start_linear_consumer(
             .concurrency(2)
             .build();
 
-        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
-            let task = &msg.data;
-            info!("📊 Linear - Processing task {}", task.id);
-            
-            simulate_work(&task, "linear").await
-        }).await.map_err(|e| e.into())
+        consumer
+            .consume(|msg: rust_rabbit::Message<Task>| async move {
+                let task = &msg.data;
+                info!("📊 Linear - Processing task {}", task.id);
+
+                simulate_work(task, "linear").await
+            })
+            .await
+            .map_err(|e| e.into())
     })
 }
 
@@ -94,12 +100,15 @@ fn start_custom_consumer(
             .concurrency(2)
             .build();
 
-        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
-            let task = &msg.data;
-            info!("🎯 Custom - Processing task {}", task.id);
-            
-            simulate_work(&task, "custom").await
-        }).await.map_err(|e| e.into())
+        consumer
+            .consume(|msg: rust_rabbit::Message<Task>| async move {
+                let task = &msg.data;
+                info!("🎯 Custom - Processing task {}", task.id);
+
+                simulate_work(task, "custom").await
+            })
+            .await
+            .map_err(|e| e.into())
     })
 }
 
@@ -113,12 +122,15 @@ fn start_no_retry_consumer(
             .concurrency(5)
             .build();
 
-        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
-            let task = &msg.data;
-            info!("🚫 No Retry - Processing task {}", task.id);
-            
-            simulate_work(&task, "no-retry").await
-        }).await.map_err(|e| e.into())
+        consumer
+            .consume(|msg: rust_rabbit::Message<Task>| async move {
+                let task = &msg.data;
+                info!("🚫 No Retry - Processing task {}", task.id);
+
+                simulate_work(task, "no-retry").await
+            })
+            .await
+            .map_err(|e| e.into())
     })
 }
 
@@ -133,29 +145,29 @@ async fn simulate_work(
 
     // Simulate failures based on task difficulty and type
     let failure_rate = match task.task_type.as_str() {
-        "easy" => 0.1,    // 10% failure rate
-        "medium" => 0.3,  // 30% failure rate  
-        "hard" => 0.6,    // 60% failure rate
+        "easy" => 0.1,       // 10% failure rate
+        "medium" => 0.3,     // 30% failure rate
+        "hard" => 0.6,       // 60% failure rate
         "impossible" => 1.0, // Always fails
-        _ => 0.2,         // 20% default failure rate
+        _ => 0.2,            // 20% default failure rate
     };
 
     // Add some randomness
     let random_factor = (task.id % 100) as f64 / 100.0;
-    
+
     if random_factor < failure_rate {
         let error_msg = match task.difficulty {
             1..=3 => "Network timeout",
             4..=6 => "Database connection failed",
-            7..=8 => "Rate limit exceeded", 
+            7..=8 => "Rate limit exceeded",
             _ => "Service unavailable",
         };
-        
+
         warn!(
             "❌ {} task {} failed: {} (difficulty: {})",
             retry_type, task.id, error_msg, task.difficulty
         );
-        
+
         return Err(error_msg.into());
     }
 
@@ -163,7 +175,7 @@ async fn simulate_work(
         "✅ {} task {} completed successfully (difficulty: {})",
         retry_type, task.id, task.difficulty
     );
-    
+
     Ok(())
 }
 
@@ -171,21 +183,49 @@ async fn simulate_work(
 #[allow(dead_code)]
 async fn publish_test_tasks() -> Result<(), Box<dyn std::error::Error>> {
     use rust_rabbit::Publisher;
-    
+
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
     let publisher = Publisher::new(connection);
-    
+
     let test_tasks = vec![
-        ("exponential_tasks", Task { id: 1, task_type: "easy".to_string(), difficulty: 2 }),
-        ("linear_tasks", Task { id: 2, task_type: "medium".to_string(), difficulty: 5 }),
-        ("custom_tasks", Task { id: 3, task_type: "hard".to_string(), difficulty: 8 }),
-        ("no_retry_tasks", Task { id: 4, task_type: "impossible".to_string(), difficulty: 10 }),
+        (
+            "exponential_tasks",
+            Task {
+                id: 1,
+                task_type: "easy".to_string(),
+                difficulty: 2,
+            },
+        ),
+        (
+            "linear_tasks",
+            Task {
+                id: 2,
+                task_type: "medium".to_string(),
+                difficulty: 5,
+            },
+        ),
+        (
+            "custom_tasks",
+            Task {
+                id: 3,
+                task_type: "hard".to_string(),
+                difficulty: 8,
+            },
+        ),
+        (
+            "no_retry_tasks",
+            Task {
+                id: 4,
+                task_type: "impossible".to_string(),
+                difficulty: 10,
+            },
+        ),
     ];
-    
+
     for (queue, task) in test_tasks {
         publisher.publish_to_queue(queue, &task, None).await?;
         info!("📤 Published task {} to {}", task.id, queue);
     }
-    
+
     Ok(())
 }

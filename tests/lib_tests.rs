@@ -1,7 +1,6 @@
 //! Basic unit tests for rust-rabbit core functionality
 
-use rust_rabbit::prelude::*;
-use rust_rabbit::{Connection, Consumer, Publisher, RetryConfig, PublishOptions};
+use rust_rabbit::{PublishOptions, RetryConfig, RetryMechanism, RustRabbitError};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -212,8 +211,8 @@ mod publish_options_tests {
     fn test_publish_options_default() {
         let options = PublishOptions::default();
 
-        assert_eq!(options.mandatory, false);
-        assert_eq!(options.immediate, false);
+        assert!(!options.mandatory);
+        assert!(!options.immediate);
         assert_eq!(options.priority, None);
         assert_eq!(options.expiration, None);
     }
@@ -245,8 +244,6 @@ mod publish_options_tests {
 
 #[cfg(test)]
 mod connection_tests {
-    use super::*;
-
     #[test]
     fn test_connection_string_parsing() {
         // Test that our simplified API accepts connection strings
@@ -350,57 +347,59 @@ mod integration_api_tests {
 // Mock tests for API design validation
 #[cfg(test)]
 mod mock_api_tests {
-    use super::*;
+    use super::TestMessage;
+    use rust_rabbit::{Connection, Consumer, PublishOptions, Publisher, RetryConfig};
 
-    #[test]
-    fn test_consumer_builder_api() {
+    #[tokio::test]
+    async fn test_consumer_builder_api() {
         // Test that the Consumer builder API is ergonomic
         // This just tests compilation, not actual functionality
 
-        async fn mock_consumer_setup() -> crate::Result<()> {
-            // This would fail at runtime without a real connection
-            // but tests the API design
-            
-            let connection = Connection::new("amqp://localhost:5672").await?;
+        // This would fail at runtime without a real connection
+        // but tests the API design
 
-            let _consumer = Consumer::builder(connection, "test_queue")
-                .with_retry(RetryConfig::exponential_default())
-                .bind_to_exchange("test_exchange", "routing.key")
-                .routing_key("test.route")
-                .concurrency(5)
-                .build();
-
-            Ok(())
+        let connection = Connection::new("amqp://localhost:5672").await;
+        if connection.is_err() {
+            // Expected - no running RabbitMQ
+            return;
         }
 
+        let connection = connection.unwrap();
+        let _consumer = Consumer::builder(connection, "test_queue")
+            .with_retry(RetryConfig::exponential_default())
+            .bind_to_exchange("test_exchange", "routing.key")
+            .routing_key("test.route")
+            .concurrency(5)
+            .build();
+
         // Just test that it compiles
-        let _ = mock_consumer_setup();
     }
 
-    #[test]
-    fn test_publisher_api() {
+    #[tokio::test]
+    async fn test_publisher_api() {
         // Test that the Publisher API is simple and ergonomic
 
-        async fn mock_publisher_usage() -> crate::Result<()> {
-            let connection = Connection::new("amqp://localhost:5672").await?;
-
-            let publisher = Publisher::new(connection);
-            let message = TestMessage::new(1, "test");
-            let options = PublishOptions::new().mandatory().priority(5);
-
-            // These would fail at runtime without a real connection
-            // but test the API design
-            publisher
-                .publish_to_exchange("exchange", "routing.key", &message, Some(options.clone()))
-                .await?;
-            publisher
-                .publish_to_queue("queue", &message, Some(options))
-                .await?;
-
-            Ok(())
+        let connection = Connection::new("amqp://localhost:5672").await;
+        if connection.is_err() {
+            // Expected - no running RabbitMQ
+            return;
         }
 
+        let connection = connection.unwrap();
+        let publisher = Publisher::new(connection);
+        let message = TestMessage::new(1, "test");
+        let options = PublishOptions::new().mandatory().priority(5);
+
+        // These would fail at runtime without a real connection
+        // but test the API design
+        let _ = publisher
+            .publish_to_exchange("exchange", "routing.key", &message, Some(options.clone()))
+            .await;
+
+        let _ = publisher
+            .publish_to_queue("queue", &message, Some(options))
+            .await;
+
         // Just test that it compiles
-        let _ = mock_publisher_usage();
     }
 }

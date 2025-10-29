@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Example 1: Simple queue publishing
     info!("📤 Publishing to queue...");
-    
+
     let order = Order {
         id: 1001,
         customer_id: 123,
@@ -43,7 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         status: "pending".to_string(),
     };
 
-    publisher.publish_to_queue("order_queue", &order, None).await?;
+    publisher
+        .publish_to_queue("order_queue", &order, None)
+        .await?;
     info!("✅ Order {} published to queue", order.id);
 
     // Example 2: Publishing with options
@@ -54,11 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         status: "urgent".to_string(),
     };
 
-    let options = PublishOptions::new()
-        .priority(9)
-        .with_expiration("300000"); // 5 minutes TTL
+    let options = PublishOptions::new().priority(9).with_expiration("300000"); // 5 minutes TTL
 
-    publisher.publish_to_queue("order_queue", &priority_order, Some(options)).await?;
+    publisher
+        .publish_to_queue("order_queue", &priority_order, Some(options))
+        .await?;
     info!("✅ Priority order {} published", priority_order.id);
 
     // Example 3: Exchange publishing with routing
@@ -135,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         publisher
             .publish_to_exchange("events", routing_key, &routing_notification, None)
             .await?;
-        
+
         info!("✅ Published: {}", description);
     }
 
