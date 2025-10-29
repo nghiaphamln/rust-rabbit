@@ -4,9 +4,65 @@
 //! - Configurable max retry count
 //! - Multiple retry mechanisms: exponential (1s->2s->4s->8s), linear, custom delays
 //! - Delay-based message retry using RabbitMQ delayed exchanges
+//! - Two delay strategies: TTL-based (original) or RabbitMQ delayed exchange plugin
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+/// Strategy for delaying retry messages
+///
+/// # TTL (Time-To-Live) Strategy
+/// Uses RabbitMQ's TTL feature with temporary retry queues.
+/// Messages are published to temporary queues that expire and route to the original queue.
+/// **Pros**: No plugin required, simple setup
+/// **Cons**: Less precise timing, requires queue cleanup
+///
+/// # DelayedExchange Strategy
+/// Uses the RabbitMQ delayed message exchange plugin (requires x-delayed-message plugin).
+/// Messages are published to a delay exchange with x-delay header.
+/// The exchange automatically routes messages after the delay period.
+/// **Pros**: More precise, cleaner architecture, single exchange
+/// **Cons**: Requires RabbitMQ plugin installation
+///
+/// # Example
+/// ```ignore
+/// use rust_rabbit::retry::{DelayStrategy, RetryConfig, RetryMechanism};
+/// use std::time::Duration;
+///
+/// // Using TTL strategy (default, no plugin required)
+/// let config = RetryConfig {
+///     max_retries: 3,
+///     mechanism: RetryMechanism::Exponential {
+///         base_delay: Duration::from_secs(1),
+///         max_delay: Duration::from_secs(60),
+///     },
+///     delay_strategy: DelayStrategy::TTL,
+///     dead_letter_exchange: None,
+///     dead_letter_queue: None,
+/// };
+///
+/// // Using RabbitMQ delayed exchange plugin (requires plugin)
+/// let config = RetryConfig {
+///     max_retries: 3,
+///     mechanism: RetryMechanism::Linear { delay: Duration::from_secs(5) },
+///     delay_strategy: DelayStrategy::DelayedExchange,
+///     dead_letter_exchange: None,
+///     dead_letter_queue: None,
+/// };
+/// ```
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum DelayStrategy {
+    /// TTL-based delays using temporary queues (no plugin required)
+    TTL,
+    /// RabbitMQ delayed message exchange plugin (requires x-delayed-message plugin)
+    DelayedExchange,
+}
+
+impl Default for DelayStrategy {
+    fn default() -> Self {
+        Self::TTL
+    }
+}
 
 /// Retry mechanism configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +92,10 @@ pub struct RetryConfig {
     /// Retry mechanism to use
     pub mechanism: RetryMechanism,
 
+    /// Strategy for delaying retry messages (TTL or DelayedExchange)
+    #[serde(default)]
+    pub delay_strategy: DelayStrategy,
+
     /// Dead letter exchange for messages that exceed max retries
     /// If None, uses default: "{queue_name}.dlx"
     pub dead_letter_exchange: Option<String>,
@@ -54,6 +114,7 @@ impl RetryConfig {
                 base_delay: Duration::from_secs(1),
                 max_delay: Duration::from_secs(60),
             },
+            delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
         }
@@ -67,6 +128,7 @@ impl RetryConfig {
                 base_delay,
                 max_delay,
             },
+            delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
         }
@@ -77,6 +139,7 @@ impl RetryConfig {
         Self {
             max_retries,
             mechanism: RetryMechanism::Linear { delay },
+            delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
         }
@@ -88,6 +151,7 @@ impl RetryConfig {
         Self {
             max_retries,
             mechanism: RetryMechanism::Custom { delays },
+            delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
         }
@@ -100,6 +164,7 @@ impl RetryConfig {
             mechanism: RetryMechanism::Linear {
                 delay: Duration::from_secs(0),
             },
+            delay_strategy: DelayStrategy::default(),
             dead_letter_exchange: None,
             dead_letter_queue: None,
         }
@@ -109,6 +174,12 @@ impl RetryConfig {
     pub fn with_dead_letter(mut self, exchange: String, queue: String) -> Self {
         self.dead_letter_exchange = Some(exchange);
         self.dead_letter_queue = Some(queue);
+        self
+    }
+
+    /// Set delay strategy to use (TTL or DelayedExchange)
+    pub fn with_delay_strategy(mut self, strategy: DelayStrategy) -> Self {
+        self.delay_strategy = strategy;
         self
     }
 
@@ -157,6 +228,11 @@ impl RetryConfig {
     /// Generate retry queue name for delayed messages
     pub fn get_retry_queue_name(&self, queue_name: &str, attempt: u32) -> String {
         format!("{}.retry.{}", queue_name, attempt + 1)
+    }
+
+    /// Get delay exchange name (for delayed exchange strategy)
+    pub fn get_delay_exchange(&self, queue_name: &str) -> String {
+        format!("{}.delay", queue_name)
     }
 }
 
@@ -248,5 +324,30 @@ mod tests {
         assert_eq!(config.get_retry_queue_name("orders", 0), "orders.retry.1");
         assert_eq!(config.get_retry_queue_name("orders", 1), "orders.retry.2");
         assert_eq!(config.get_retry_queue_name("orders", 4), "orders.retry.5");
+    }
+
+    #[test]
+    fn test_delay_exchange_names() {
+        let config = RetryConfig::exponential_default();
+
+        assert_eq!(config.get_delay_exchange("orders"), "orders.delay");
+    }
+
+    #[test]
+    fn test_delay_strategy_default() {
+        let config = RetryConfig::exponential_default();
+
+        assert!(matches!(config.delay_strategy, DelayStrategy::TTL));
+    }
+
+    #[test]
+    fn test_delay_strategy_configuration() {
+        let config =
+            RetryConfig::exponential_default().with_delay_strategy(DelayStrategy::DelayedExchange);
+
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
     }
 }

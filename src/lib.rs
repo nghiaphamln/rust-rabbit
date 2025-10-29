@@ -156,7 +156,7 @@ pub use message::{
     ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource, WireMessage,
 };
 pub use publisher::{PublishOptions, Publisher};
-pub use retry::{RetryConfig, RetryMechanism};
+pub use retry::{DelayStrategy, RetryConfig, RetryMechanism};
 
 // Internal modules
 mod connection;
@@ -169,9 +169,9 @@ mod retry;
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        Connection, Consumer, ConsumerBuilder, ErrorRecord, ErrorType, Message, MessageEnvelope,
-        MessageMetadata, MessageSource, PublishOptions, Publisher, Result, RetryConfig,
-        RetryMechanism, RustRabbitError, WireMessage,
+        Connection, Consumer, ConsumerBuilder, DelayStrategy, ErrorRecord, ErrorType, Message,
+        MessageEnvelope, MessageMetadata, MessageSource, PublishOptions, Publisher, Result,
+        RetryConfig, RetryMechanism, RustRabbitError, WireMessage,
     };
 }
 

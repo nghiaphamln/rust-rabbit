@@ -132,6 +132,116 @@ let no_retry = RetryConfig::no_retry();
 // 3. If max retries exceeded, sent to dead letter queue (e.g., orders.dlq)
 ```
 
+### Delay Strategies (TTL vs DelayedExchange)
+
+rust-rabbit supports two strategies for implementing message delays:
+
+#### 1. **TTL Strategy (Default)** - No Plugin Required
+
+Uses RabbitMQ's TTL feature with temporary retry queues. Simple but less precise.
+
+```rust
+use rust_rabbit::{RetryConfig, DelayStrategy, Consumer, Connection};
+use std::time::Duration;
+
+let retry_config = RetryConfig::exponential_default()
+    .with_delay_strategy(DelayStrategy::TTL); // Default, no plugin needed
+
+// Messages failed are sent to: orders.retry.1 (with TTL set)
+// After TTL expires, automatically routed back to: orders
+```
+
+**Pros:**
+- No external plugin required
+- Works out-of-the-box with standard RabbitMQ
+- Simple setup
+
+**Cons:**
+- Less precise timing (TTL granularity depends on RabbitMQ configuration)
+- Creates many temporary queues (one per retry attempt)
+- Requires cleanup of old retry queues
+
+#### 2. **DelayedExchange Strategy** - Better Precision
+
+Uses the `rabbitmq_delayed_message_exchange` plugin for server-side delay management. More reliable and cleaner architecture.
+
+```rust
+use rust_rabbit::{RetryConfig, DelayStrategy, Consumer, Connection};
+use std::time::Duration;
+
+let retry_config = RetryConfig::exponential_default()
+    .with_delay_strategy(DelayStrategy::DelayedExchange);
+
+// Messages are published to: orders.delay (delay exchange)
+// With x-delay header set to desired delay time
+// Exchange automatically routes back to: orders after delay
+```
+
+**Setup Requirements:**
+
+1. Install the plugin on RabbitMQ:
+   ```bash
+   # Download from: https://github.com/rabbitmq/rabbitmq-delayed-message-exchange
+   # Place .ez file in RabbitMQ plugins directory
+   
+   # Enable plugin
+   rabbitmq-plugins enable rabbitmq_delayed_message_exchange
+   
+   # Restart RabbitMQ
+   sudo systemctl restart rabbitmq-server
+   ```
+
+2. Use in code:
+   ```rust
+   let retry_config = RetryConfig::linear(3, Duration::from_secs(5))
+       .with_delay_strategy(DelayStrategy::DelayedExchange);
+   
+   let consumer = Consumer::builder(connection, "orders")
+       .with_retry(retry_config)
+       .build();
+   ```
+
+**Pros:**
+- More precise timing (microsecond-level)
+- Cleaner architecture (single delay exchange)
+- Better for high-volume scenarios
+- Lower memory footprint on RabbitMQ
+- Built-in reliability
+
+**Cons:**
+- Requires external plugin installation
+- Plugin adds complexity to RabbitMQ setup
+- Small performance overhead for delay management
+
+**Flow Diagram:**
+
+```
+DelayedExchange Strategy Flow:
+┌──────────┐
+│  Queue   │  (e.g., "orders")
+└────┬─────┘
+     │
+     ├─> Handler fails ──┐
+     │                   │
+     │              Publish to
+     │              Delay Exchange
+     │                   │
+     └─────────── ┌──────▼──────┐
+                  │ orders.delay │ (x-delay: 5000ms)
+                  └──────┬───────┘
+                         │
+                    After delay
+                         │
+                  ┌──────▼──────┐
+                  │  Queue      │
+                  │  (orders)   │
+                  └─────────────┘
+```
+
+**Example:**
+
+See [delayed_exchange_example.rs](examples/delayed_exchange_example.rs) for a complete working example.
+
 ## ⚙️ **Advanced Features**
 
 ### MessageEnvelope System
@@ -234,6 +344,7 @@ See the [`examples/`](examples/) directory for complete working examples:
 - **[Basic Publisher](examples/basic_publisher.rs)** - Simple message publishing
 - **[Basic Consumer](examples/basic_consumer.rs)** - Simple message consumption  
 - **[Retry Examples](examples/retry_examples.rs)** - Different retry configurations
+- **[Delayed Exchange Example](examples/delayed_exchange_example.rs)** - Using rabbitmq_delayed_message_exchange plugin
 - **[Production Setup](examples/production_setup.rs)** - Production-ready configuration
 
 ## 🧪 **Testing**

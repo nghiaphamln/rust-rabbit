@@ -280,6 +280,81 @@ impl Consumer {
         Ok(())
     }
 
+    /// Create delay exchange using RabbitMQ delayed message exchange plugin
+    /// Requires rabbitmq_delayed_message_exchange plugin to be installed on RabbitMQ
+    async fn create_delay_exchange(&self, channel: &Channel) -> Result<String, RustRabbitError> {
+        if let Some(retry_config) = &self.retry_config {
+            let delay_exchange = retry_config.get_delay_exchange(&self.queue_name);
+
+            // Declare delay exchange with x-delayed-type argument
+            let mut args = FieldTable::default();
+            args.insert(
+                "x-delayed-type".into(),
+                AMQPValue::LongString("direct".into()),
+            );
+
+            channel
+                .exchange_declare(
+                    &delay_exchange,
+                    lapin::ExchangeKind::Custom("x-delayed-message".to_string()),
+                    lapin::options::ExchangeDeclareOptions {
+                        durable: true,
+                        ..Default::default()
+                    },
+                    args,
+                )
+                .await?;
+
+            debug!(
+                "Created delay exchange: {} (x-delayed-message type)",
+                delay_exchange
+            );
+            Ok(delay_exchange)
+        } else {
+            Err(RustRabbitError::Retry(
+                "Retry config not configured".to_string(),
+            ))
+        }
+    }
+
+    /// Send message to delay exchange with x-delay header for retry
+    /// Message will be automatically routed back to the original queue after delay
+    async fn send_to_delay_exchange(
+        &self,
+        channel: &Channel,
+        message_data: &[u8],
+        delay: std::time::Duration,
+    ) -> Result<(), RustRabbitError> {
+        let delay_exchange = self.create_delay_exchange(channel).await?;
+        let delay_ms = delay.as_millis() as i64;
+
+        // Publish to delay exchange with x-delay header
+        // The message will be re-delivered to original queue after delay
+        channel
+            .basic_publish(
+                &delay_exchange,
+                &self.queue_name, // Routing key: original queue name
+                BasicPublishOptions::default(),
+                message_data,
+                BasicProperties::default()
+                    .with_content_type("application/json".into())
+                    .with_delivery_mode(2) // Persistent
+                    .with_headers({
+                        let mut headers = FieldTable::default();
+                        headers.insert("x-delay".into(), AMQPValue::LongLongInt(delay_ms));
+                        headers
+                    }),
+            )
+            .await?
+            .await?;
+
+        debug!(
+            "Sent message to delay exchange: {} with delay: {}ms",
+            delay_exchange, delay_ms
+        );
+        Ok(())
+    }
+
     /// Start consuming messages
     pub async fn consume<T, H, Fut>(&self, handler: H) -> Result<(), RustRabbitError>
     where
@@ -397,24 +472,38 @@ impl Consumer {
                                                         }
                                                     };
 
-                                                // Send to retry queue with delay
-                                                if let Err(e) = consumer_self
-                                                    .send_to_retry_queue(
-                                                        &channel_clone,
-                                                        &retry_payload,
-                                                        message.retry_attempt + 1,
-                                                        delay,
-                                                    )
-                                                    .await
-                                                {
-                                                    error!("Failed to send to retry queue: {}", e);
+                                                // Send via appropriate strategy (TTL or DelayedExchange)
+                                                let send_result = if matches!(
+                                                    retry_cfg.delay_strategy,
+                                                    crate::retry::DelayStrategy::DelayedExchange
+                                                ) {
+                                                    consumer_self
+                                                        .send_to_delay_exchange(
+                                                            &channel_clone,
+                                                            &retry_payload,
+                                                            delay,
+                                                        )
+                                                        .await
+                                                } else {
+                                                    consumer_self
+                                                        .send_to_retry_queue(
+                                                            &channel_clone,
+                                                            &retry_payload,
+                                                            message.retry_attempt + 1,
+                                                            delay,
+                                                        )
+                                                        .await
+                                                };
+
+                                                if let Err(e) = send_result {
+                                                    error!("Failed to send retry message: {}", e);
                                                     if let Err(e) = message.nack(false).await {
                                                         error!("Failed to nack message: {}", e);
                                                     }
                                                     return;
                                                 }
 
-                                                // ACK original message (it's now in retry queue)
+                                                // ACK original message (it's now queued for retry)
                                                 if let Err(e) = message.ack().await {
                                                     error!(
                                                         "Failed to ack message after retry: {}",
@@ -513,6 +602,32 @@ impl Consumer {
                     FieldTable::default(),
                 )
                 .await?;
+        }
+
+        // Setup delay exchange if using DelayedExchange strategy
+        if let Some(retry_config) = &self.retry_config {
+            if matches!(
+                retry_config.delay_strategy,
+                crate::retry::DelayStrategy::DelayedExchange
+            ) {
+                let delay_exchange = self.create_delay_exchange(channel).await?;
+
+                // Bind delay exchange to original queue
+                channel
+                    .queue_bind(
+                        &self.queue_name,
+                        &delay_exchange,
+                        &self.queue_name, // Routing key: original queue name
+                        lapin::options::QueueBindOptions::default(),
+                        FieldTable::default(),
+                    )
+                    .await?;
+
+                debug!(
+                    "Bound queue {} to delay exchange {}",
+                    self.queue_name, delay_exchange
+                );
+            }
         }
 
         Ok(())
@@ -648,17 +763,33 @@ impl Consumer {
                                                             auto_ack: true,
                                                         };
 
-                                                        // Send to retry queue with delay
-                                                        if let Err(e) = consumer_self
-                                                            .send_to_retry_queue(
-                                                                &channel_clone,
-                                                                &retry_payload,
-                                                                envelope.metadata.retry_attempt,
-                                                                delay,
-                                                            )
-                                                            .await
-                                                        {
-                                                            error!("Failed to send envelope to retry queue: {}", e);
+                                                        // Send via appropriate strategy (TTL or DelayedExchange)
+                                                        let send_result = if matches!(
+                                                            retry_config_clone
+                                                                .as_ref()
+                                                                .map(|c| c.delay_strategy),
+                                                            Some(crate::retry::DelayStrategy::DelayedExchange)
+                                                        ) {
+                                                            consumer_self
+                                                                .send_to_delay_exchange(
+                                                                    &channel_clone,
+                                                                    &retry_payload,
+                                                                    delay,
+                                                                )
+                                                                .await
+                                                        } else {
+                                                            consumer_self
+                                                                .send_to_retry_queue(
+                                                                    &channel_clone,
+                                                                    &retry_payload,
+                                                                    envelope.metadata.retry_attempt,
+                                                                    delay,
+                                                                )
+                                                                .await
+                                                        };
+
+                                                        if let Err(e) = send_result {
+                                                            error!("Failed to send envelope for retry: {}", e);
                                                             // Fallback to simple nack
                                                             if let Err(e) = channel_clone
                                                                 .basic_nack(
@@ -675,7 +806,7 @@ impl Consumer {
                                                             return;
                                                         }
 
-                                                        // ACK original message (it's now in retry queue)
+                                                        // ACK original message (it's now queued for retry)
                                                         if let Err(e) = channel_clone
                                                             .basic_ack(
                                                                 delivery.delivery_tag,

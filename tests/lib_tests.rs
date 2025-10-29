@@ -1,6 +1,6 @@
 //! Basic unit tests for rust-rabbit core functionality
 
-use rust_rabbit::{PublishOptions, RetryConfig, RetryMechanism, RustRabbitError};
+use rust_rabbit::{DelayStrategy, PublishOptions, RetryConfig, RetryMechanism, RustRabbitError};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -401,5 +401,91 @@ mod mock_api_tests {
             .await;
 
         // Just test that it compiles
+    }
+}
+
+#[cfg(test)]
+mod delay_strategy_tests {
+    use super::*;
+
+    #[test]
+    fn test_delay_strategy_default() {
+        let config = RetryConfig::exponential_default();
+        assert!(matches!(config.delay_strategy, DelayStrategy::TTL));
+    }
+
+    #[test]
+    fn test_delay_strategy_ttl() {
+        let config = RetryConfig::exponential_default().with_delay_strategy(DelayStrategy::TTL);
+        assert!(matches!(config.delay_strategy, DelayStrategy::TTL));
+    }
+
+    #[test]
+    fn test_delay_strategy_delayed_exchange() {
+        let config =
+            RetryConfig::exponential_default().with_delay_strategy(DelayStrategy::DelayedExchange);
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
+    }
+
+    #[test]
+    fn test_delay_exchange_name_generation() {
+        let config = RetryConfig::exponential_default();
+        assert_eq!(config.get_delay_exchange("orders"), "orders.delay");
+        assert_eq!(config.get_delay_exchange("payments"), "payments.delay");
+    }
+
+    #[test]
+    fn test_retry_with_delayed_exchange_strategy() {
+        let config = RetryConfig::linear(3, Duration::from_secs(5))
+            .with_delay_strategy(DelayStrategy::DelayedExchange);
+
+        assert_eq!(config.max_retries, 3);
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(3), None);
+    }
+
+    #[test]
+    fn test_custom_retry_with_delayed_exchange() {
+        let delays = vec![
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+        ];
+        let config =
+            RetryConfig::custom(delays).with_delay_strategy(DelayStrategy::DelayedExchange);
+
+        assert_eq!(config.max_retries, 3);
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
+        assert_eq!(config.calculate_delay(0), Some(Duration::from_secs(1)));
+        assert_eq!(config.calculate_delay(1), Some(Duration::from_secs(5)));
+        assert_eq!(config.calculate_delay(2), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_exponential_with_delayed_exchange_and_dlq() {
+        let config = RetryConfig::exponential(2, Duration::from_secs(1), Duration::from_secs(10))
+            .with_delay_strategy(DelayStrategy::DelayedExchange)
+            .with_dead_letter("custom_dlx".to_string(), "custom_dlq".to_string());
+
+        assert_eq!(config.max_retries, 2);
+        assert!(matches!(
+            config.delay_strategy,
+            DelayStrategy::DelayedExchange
+        ));
+        assert_eq!(config.get_dead_letter_exchange("orders"), "custom_dlx");
+        assert_eq!(config.get_dead_letter_queue("orders"), "custom_dlq");
+        assert_eq!(config.get_delay_exchange("orders"), "orders.delay");
     }
 }
