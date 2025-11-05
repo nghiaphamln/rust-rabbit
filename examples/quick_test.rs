@@ -48,8 +48,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Start consuming (will run forever)
     println!("Starting consumer...");
     consumer
-        .consume(|message: Message<TestMessage>| async move {
-            println!("Received message: {:?}", message.data);
+        .consume(|message: TestMessage| async move {
+            println!("Received message: {:?}", message);
 
             // Simulate some processing
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;

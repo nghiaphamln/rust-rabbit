@@ -41,10 +41,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Process messages
     consumer
-        .consume(|msg: rust_rabbit::Message<TestMessage>| async move {
+        .consume(|msg: TestMessage| async move {
             println!("🎯 Received message:");
-            println!("  - Data: {:?}", msg.data);
-            println!("  - Retry attempt: {}", msg.retry_attempt);
+            println!("  - Data: {:?}", msg);
             println!("✅ Message format test successful!");
 
             // For demo purposes, exit after first message

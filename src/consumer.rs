@@ -1,7 +1,7 @@
 use crate::{
     connection::Connection,
     error::RustRabbitError,
-    message::{ErrorType, MessageEnvelope, WireMessage},
+    message::{ErrorType, MassTransitEnvelope, MessageEnvelope},
     retry::RetryConfig,
 };
 use futures_lite::stream::StreamExt;
@@ -11,63 +11,81 @@ use lapin::{
     BasicProperties, Channel,
 };
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tracing::{debug, error, warn};
 
-/// Message wrapper with retry tracking
-#[derive(Debug)]
-pub struct Message<T>
-where
-    T: Clone,
-{
-    pub data: T,
-    pub retry_attempt: u32,
-    tag: u64,
-    channel: Arc<Channel>,
-}
+// Helper functions for reading/writing headers
+const HEADER_RETRY_ATTEMPT: &str = "x-retry-attempt";
+const HEADER_CORRELATION_ID: &str = "x-correlation-id";
 
-impl<T> Clone for Message<T>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            data: self.data.clone(),
-            retry_attempt: self.retry_attempt,
-            tag: self.tag,
-            channel: Arc::clone(&self.channel),
+/// Read retry_attempt from AMQP headers, defaulting to 0 if not present
+fn read_retry_attempt(properties: &BasicProperties) -> u32 {
+    if let Some(headers) = properties.headers() {
+        // Iterate over headers to find the key
+        for (header_key, value) in headers {
+            if header_key.as_str() == HEADER_RETRY_ATTEMPT {
+                if let AMQPValue::LongLongInt(attempt) = value {
+                    return *attempt as u32;
+                }
+            }
         }
     }
+    0
 }
 
-impl<T> Message<T>
-where
-    T: Clone,
-{
-    /// Acknowledge the message
-    pub async fn ack(&self) -> Result<(), RustRabbitError> {
-        self.channel
-            .basic_ack(self.tag, BasicAckOptions::default())
-            .await
-            .map_err(RustRabbitError::from)
+/// Read correlation_id from AMQP headers
+fn read_correlation_id(properties: &BasicProperties) -> Option<String> {
+    if let Some(headers) = properties.headers() {
+        // Iterate over headers to find the key
+        for (header_key, value) in headers {
+            if header_key.as_str() == HEADER_CORRELATION_ID {
+                if let AMQPValue::LongString(corr_id) = value {
+                    return Some(corr_id.to_string());
+                }
+            }
+        }
     }
+    None
+}
 
-    /// Reject and requeue the message
-    pub async fn nack(&self, requeue: bool) -> Result<(), RustRabbitError> {
-        self.channel
-            .basic_nack(
-                self.tag,
-                lapin::options::BasicNackOptions {
-                    multiple: false,
-                    requeue,
-                },
-            )
-            .await
-            .map_err(RustRabbitError::from)
+/// Create headers with retry_attempt and correlation_id
+///
+/// This function is kept for potential future use or testing scenarios
+/// where header creation is needed outside of the main message processing flow.
+#[allow(dead_code)]
+fn create_headers(retry_attempt: u32, correlation_id: Option<&str>) -> FieldTable {
+    let mut headers = FieldTable::default();
+    headers.insert(
+        HEADER_RETRY_ATTEMPT.into(),
+        AMQPValue::LongLongInt(retry_attempt as i64),
+    );
+    if let Some(corr_id) = correlation_id {
+        headers.insert(
+            HEADER_CORRELATION_ID.into(),
+            AMQPValue::LongString(corr_id.into()),
+        );
     }
+    headers
+}
+
+/// Update headers with new retry_attempt, preserving existing headers
+fn update_headers_with_retry(
+    existing_headers: Option<&FieldTable>,
+    retry_attempt: u32,
+) -> FieldTable {
+    let mut headers = match existing_headers {
+        Some(h) => h.clone(),
+        None => FieldTable::default(),
+    };
+    headers.insert(
+        HEADER_RETRY_ATTEMPT.into(),
+        AMQPValue::LongLongInt(retry_attempt as i64),
+    );
+    headers
 }
 
 /// Consumer configuration builder
@@ -276,6 +294,41 @@ impl Consumer {
         Ok(())
     }
 
+    /// Send message to retry queue with delay and custom headers
+    async fn send_to_retry_queue_with_headers(
+        &self,
+        channel: &Channel,
+        message_data: &[u8],
+        retry_attempt: u32,
+        delay: std::time::Duration,
+        headers: FieldTable,
+    ) -> Result<(), RustRabbitError> {
+        let retry_queue_name = self
+            .create_retry_queue(channel, retry_attempt, delay)
+            .await?;
+
+        // Publish to retry queue with headers
+        channel
+            .basic_publish(
+                "", // Default exchange
+                &retry_queue_name,
+                BasicPublishOptions::default(),
+                message_data,
+                BasicProperties::default()
+                    .with_content_type("application/json".into())
+                    .with_delivery_mode(2) // Persistent
+                    .with_headers(headers),
+            )
+            .await?
+            .await?;
+
+        debug!(
+            "Sent message to retry queue with headers: {}",
+            retry_queue_name
+        );
+        Ok(())
+    }
+
     /// Send message to DLQ
     async fn send_to_dlq_simple(
         &self,
@@ -377,11 +430,50 @@ impl Consumer {
         Ok(())
     }
 
-    /// Start consuming messages
+    /// Send message to delay exchange with x-delay header and custom headers for retry
+    /// Message will be automatically routed back to the original queue after delay
+    async fn send_to_delay_exchange_with_headers(
+        &self,
+        channel: &Channel,
+        message_data: &[u8],
+        delay: std::time::Duration,
+        mut headers: FieldTable,
+    ) -> Result<(), RustRabbitError> {
+        let delay_exchange = self.create_delay_exchange(channel).await?;
+        let delay_ms = delay.as_millis() as i64;
+
+        // Add x-delay header to existing headers
+        headers.insert("x-delay".into(), AMQPValue::LongLongInt(delay_ms));
+
+        // Publish to delay exchange with headers
+        // The message will be re-delivered to original queue after delay
+        channel
+            .basic_publish(
+                &delay_exchange,
+                &self.queue_name, // Routing key: original queue name
+                BasicPublishOptions::default(),
+                message_data,
+                BasicProperties::default()
+                    .with_content_type("application/json".into())
+                    .with_delivery_mode(2) // Persistent
+                    .with_headers(headers),
+            )
+            .await?
+            .await?;
+
+        debug!(
+            "Sent message to delay exchange with headers: {} with delay: {}ms",
+            delay_exchange, delay_ms
+        );
+        Ok(())
+    }
+
+    /// Start consuming messages with smart MassTransit detection
+    /// Handler receives just the payload type T (no wrapper)
     pub async fn consume<T, H, Fut>(&self, handler: H) -> Result<(), RustRabbitError>
     where
-        T: DeserializeOwned + Send + Clone + Sync + 'static + serde::Serialize,
-        H: Fn(Message<T>) -> Fut + Send + Sync + Clone + 'static,
+        T: DeserializeOwned + Send + Clone + Sync + 'static + Serialize,
+        H: Fn(T) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
     {
         let channel = self.connection.create_channel().await?;
@@ -431,164 +523,287 @@ impl Consumer {
 
             tokio::spawn(async move {
                 let _permit = permit;
+                let delivery_tag = delivery.delivery_tag;
+                let properties = delivery.properties;
 
-                // Deserialize as WireMessage format
-                match serde_json::from_slice::<crate::message::WireMessage<T>>(&delivery.data) {
-                    Ok(wire_msg) => {
-                        let message = Message {
-                            data: wire_msg.data,
-                            retry_attempt: wire_msg.retry_attempt,
-                            tag: delivery.delivery_tag,
-                            channel: channel_clone.clone(),
-                        };
-
-                        // Process message
-                        match handler_clone(message.clone()).await {
-                            Ok(()) => {
-                                if auto_ack {
-                                    if let Err(e) = message.ack().await {
-                                        error!("Failed to ack message: {}", e);
-                                    }
+                // Smart detection: Try MassTransit format first
+                let (payload, correlation_id_from_mt) =
+                    match MassTransitEnvelope::from_slice(&delivery.data) {
+                        Ok(mt_envelope) => {
+                            // MassTransit format detected - extract payload
+                            match mt_envelope.extract_message::<T>() {
+                                Ok(data) => {
+                                    debug!("Detected MassTransit format, extracted payload");
+                                    (data, mt_envelope.correlation_id().map(|s| s.to_string()))
                                 }
-                                debug!("Message processed successfully");
-                            }
-                            Err(e) => {
-                                error!("Handler error: {}", e);
-                                if auto_ack {
-                                    // Check if retry is configured
-                                    if let Some(retry_cfg) = &retry_config {
-                                        if message.retry_attempt < retry_cfg.max_retries {
-                                            // Calculate delay for next retry
-                                            if let Some(delay) =
-                                                retry_cfg.calculate_delay(message.retry_attempt)
-                                            {
-                                                warn!(
-                                                    "Scheduling retry {} with delay {:?} for message",
-                                                    message.retry_attempt + 1,
-                                                    delay
-                                                );
-
-                                                // Update retry attempt in wire message
-                                                let wire_msg = WireMessage {
-                                                    data: message.data.clone(),
-                                                    retry_attempt: message.retry_attempt + 1,
-                                                };
-
-                                                let retry_payload =
-                                                    match serde_json::to_vec(&wire_msg) {
-                                                        Ok(payload) => payload,
-                                                        Err(e) => {
-                                                            error!(
-                                                            "Failed to serialize retry message: {}",
-                                                            e
-                                                        );
-                                                            if let Err(e) =
-                                                                message.nack(false).await
-                                                            {
-                                                                error!(
-                                                                    "Failed to nack message: {}",
-                                                                    e
-                                                                );
-                                                            }
-                                                            return;
-                                                        }
-                                                    };
-
-                                                // Send via appropriate strategy (TTL or DelayedExchange)
-                                                let send_result = if matches!(
-                                                    retry_cfg.delay_strategy,
-                                                    crate::retry::DelayStrategy::DelayedExchange
-                                                ) {
-                                                    consumer_self
-                                                        .send_to_delay_exchange(
-                                                            &channel_clone,
-                                                            &retry_payload,
-                                                            delay,
-                                                        )
-                                                        .await
-                                                } else {
-                                                    consumer_self
-                                                        .send_to_retry_queue(
-                                                            &channel_clone,
-                                                            &retry_payload,
-                                                            message.retry_attempt + 1,
-                                                            delay,
-                                                        )
-                                                        .await
-                                                };
-
-                                                if let Err(e) = send_result {
-                                                    error!("Failed to send retry message: {}", e);
-                                                    if let Err(e) = message.nack(false).await {
-                                                        error!("Failed to nack message: {}", e);
-                                                    }
-                                                    return;
-                                                }
-
-                                                // ACK original message (it's now queued for retry)
-                                                if let Err(e) = message.ack().await {
-                                                    error!(
-                                                        "Failed to ack message after retry: {}",
-                                                        e
-                                                    );
-                                                }
-                                            } else {
-                                                // No more retries, send to DLQ
-                                                warn!("Retry exhausted, sending to DLQ");
-                                                if let Err(e) = consumer_self
-                                                    .send_to_dlq_simple(
-                                                        &channel_clone,
-                                                        &delivery.data,
-                                                    )
-                                                    .await
-                                                {
-                                                    error!("Failed to send to DLQ: {}", e);
-                                                }
-                                                if let Err(e) = message.ack().await {
-                                                    error!(
-                                                        "Failed to ack message after DLQ: {}",
-                                                        e
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            // Retry exhausted, send to DLQ
-                                            warn!("Max retries reached, sending to DLQ");
-                                            if let Err(e) = consumer_self
-                                                .send_to_dlq_simple(&channel_clone, &delivery.data)
-                                                .await
-                                            {
-                                                error!("Failed to send to DLQ: {}", e);
-                                            }
-                                            if let Err(e) = message.ack().await {
-                                                error!("Failed to ack message after DLQ: {}", e);
-                                            }
-                                        }
-                                    } else {
-                                        // No retry config, just nack
-                                        if let Err(e) = message.nack(false).await {
-                                            error!("Failed to nack message: {}", e);
+                                Err(e) => {
+                                    error!(
+                                        "Failed to extract payload from MassTransit envelope: {}",
+                                        e
+                                    );
+                                    if auto_ack {
+                                        if let Err(e) = channel_clone
+                                            .basic_nack(
+                                                delivery_tag,
+                                                lapin::options::BasicNackOptions {
+                                                    multiple: false,
+                                                    requeue: false,
+                                                },
+                                            )
+                                            .await
+                                        {
+                                            error!("Failed to nack malformed message: {}", e);
                                         }
                                     }
+                                    return;
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!("Failed to deserialize message: {}", e);
+                        Err(_) => {
+                            // Not MassTransit format - try direct deserialization
+                            match serde_json::from_slice::<T>(&delivery.data) {
+                                Ok(data) => {
+                                    debug!("Direct format detected");
+                                    (data, None)
+                                }
+                                Err(e) => {
+                                    error!("Failed to deserialize message: {}", e);
+                                    if auto_ack {
+                                        if let Err(e) = channel_clone
+                                            .basic_nack(
+                                                delivery_tag,
+                                                lapin::options::BasicNackOptions {
+                                                    multiple: false,
+                                                    requeue: false,
+                                                },
+                                            )
+                                            .await
+                                        {
+                                            error!("Failed to nack malformed message: {}", e);
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    };
+
+                // Read metadata from headers
+                let retry_attempt = read_retry_attempt(&properties);
+                let correlation_id =
+                    correlation_id_from_mt.or_else(|| read_correlation_id(&properties));
+
+                // If we got correlation_id from MassTransit but it's not in headers, we should add it
+                // But for now, we'll just use it for retries
+
+                // Process message - handler receives just T
+                match handler_clone(payload.clone()).await {
+                    Ok(()) => {
                         if auto_ack {
-                            // Reject malformed messages
                             if let Err(e) = channel_clone
-                                .basic_nack(
-                                    delivery.delivery_tag,
-                                    lapin::options::BasicNackOptions {
-                                        multiple: false,
-                                        requeue: false,
-                                    },
-                                )
+                                .basic_ack(delivery_tag, BasicAckOptions::default())
                                 .await
                             {
-                                error!("Failed to nack malformed message: {}", e);
+                                error!("Failed to ack message: {}", e);
+                            }
+                        }
+                        debug!("Message processed successfully");
+                    }
+                    Err(e) => {
+                        error!("Handler error: {}", e);
+                        if auto_ack {
+                            // Check if retry is configured
+                            if let Some(retry_cfg) = &retry_config {
+                                if retry_attempt < retry_cfg.max_retries {
+                                    // Calculate delay for next retry
+                                    if let Some(delay) = retry_cfg.calculate_delay(retry_attempt) {
+                                        warn!(
+                                            "Scheduling retry {} with delay {:?} for message",
+                                            retry_attempt + 1,
+                                            delay
+                                        );
+
+                                        // Serialize payload (raw, no wrapper)
+                                        let payload_bytes = match serde_json::to_vec(&payload) {
+                                            Ok(bytes) => bytes,
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to serialize payload for retry: {}",
+                                                    e
+                                                );
+                                                if let Err(e) = channel_clone
+                                                    .basic_nack(
+                                                        delivery_tag,
+                                                        lapin::options::BasicNackOptions {
+                                                            multiple: false,
+                                                            requeue: false,
+                                                        },
+                                                    )
+                                                    .await
+                                                {
+                                                    error!("Failed to nack message: {}", e);
+                                                }
+                                                return;
+                                            }
+                                        };
+
+                                        // Update headers with new retry_attempt, preserving existing headers
+                                        let mut updated_headers = update_headers_with_retry(
+                                            properties.headers().as_ref(),
+                                            retry_attempt + 1,
+                                        );
+
+                                        // Preserve correlation_id in headers if present
+                                        if let Some(corr_id) = &correlation_id {
+                                            updated_headers.insert(
+                                                HEADER_CORRELATION_ID.into(),
+                                                AMQPValue::LongString(corr_id.clone().into()),
+                                            );
+                                        }
+
+                                        // Send via appropriate strategy (TTL or DelayedExchange)
+                                        let send_result = if matches!(
+                                            retry_cfg.delay_strategy,
+                                            crate::retry::DelayStrategy::DelayedExchange
+                                        ) {
+                                            consumer_self
+                                                .send_to_delay_exchange_with_headers(
+                                                    &channel_clone,
+                                                    &payload_bytes,
+                                                    delay,
+                                                    updated_headers,
+                                                )
+                                                .await
+                                        } else {
+                                            consumer_self
+                                                .send_to_retry_queue_with_headers(
+                                                    &channel_clone,
+                                                    &payload_bytes,
+                                                    retry_attempt + 1,
+                                                    delay,
+                                                    updated_headers,
+                                                )
+                                                .await
+                                        };
+
+                                        if let Err(e) = send_result {
+                                            error!("Failed to send retry message: {}", e);
+                                            if let Err(e) = channel_clone
+                                                .basic_nack(
+                                                    delivery_tag,
+                                                    lapin::options::BasicNackOptions {
+                                                        multiple: false,
+                                                        requeue: false,
+                                                    },
+                                                )
+                                                .await
+                                            {
+                                                error!("Failed to nack message: {}", e);
+                                            }
+                                            return;
+                                        }
+
+                                        // ACK original message (it's now queued for retry)
+                                        if let Err(e) = channel_clone
+                                            .basic_ack(delivery_tag, BasicAckOptions::default())
+                                            .await
+                                        {
+                                            error!("Failed to ack message after retry: {}", e);
+                                        }
+                                    } else {
+                                        // No more retries, send to DLQ
+                                        warn!("Retry exhausted, sending to DLQ");
+                                        let payload_bytes = match serde_json::to_vec(&payload) {
+                                            Ok(bytes) => bytes,
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to serialize payload for DLQ: {}. Creating error payload.",
+                                                    e
+                                                );
+                                                // Create descriptive error payload instead of using raw delivery.data
+                                                serde_json::to_vec(&serde_json::json!({
+                                                    "error": "Failed to serialize payload for DLQ",
+                                                    "serialization_error": e.to_string(),
+                                                    "retry_attempt": retry_attempt,
+                                                    "original_message_size": delivery.data.len()
+                                                }))
+                                                .unwrap_or_else(|_| {
+                                                    // Last resort: minimal error message
+                                                    format!(
+                                                        r#"{{"error":"Serialization failed for DLQ","attempt":{}}}"#,
+                                                        retry_attempt
+                                                    )
+                                                    .into_bytes()
+                                                })
+                                            }
+                                        };
+                                        if let Err(e) = consumer_self
+                                            .send_to_dlq_simple(&channel_clone, &payload_bytes)
+                                            .await
+                                        {
+                                            error!("Failed to send to DLQ: {}", e);
+                                        }
+                                        if let Err(e) = channel_clone
+                                            .basic_ack(delivery_tag, BasicAckOptions::default())
+                                            .await
+                                        {
+                                            error!("Failed to ack message after DLQ: {}", e);
+                                        }
+                                    }
+                                } else {
+                                    // Retry exhausted, send to DLQ
+                                    warn!("Max retries reached, sending to DLQ");
+                                    let payload_bytes = match serde_json::to_vec(&payload) {
+                                        Ok(bytes) => bytes,
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to serialize payload for DLQ: {}. Creating error payload.",
+                                                e
+                                            );
+                                            // Create descriptive error payload instead of using raw delivery.data
+                                            serde_json::to_vec(&serde_json::json!({
+                                                "error": "Failed to serialize payload for DLQ",
+                                                "serialization_error": e.to_string(),
+                                                "retry_attempt": retry_attempt,
+                                                "original_message_size": delivery.data.len()
+                                            }))
+                                            .unwrap_or_else(|_| {
+                                                // Last resort: minimal error message
+                                                format!(
+                                                    r#"{{"error":"Serialization failed for DLQ","attempt":{}}}"#,
+                                                    retry_attempt
+                                                )
+                                                .into_bytes()
+                                            })
+                                        }
+                                    };
+                                    if let Err(e) = consumer_self
+                                        .send_to_dlq_simple(&channel_clone, &payload_bytes)
+                                        .await
+                                    {
+                                        error!("Failed to send to DLQ: {}", e);
+                                    }
+                                    if let Err(e) = channel_clone
+                                        .basic_ack(delivery_tag, BasicAckOptions::default())
+                                        .await
+                                    {
+                                        error!("Failed to ack message after DLQ: {}", e);
+                                    }
+                                }
+                            } else {
+                                // No retry config, just nack
+                                if let Err(e) = channel_clone
+                                    .basic_nack(
+                                        delivery_tag,
+                                        lapin::options::BasicNackOptions {
+                                            multiple: false,
+                                            requeue: false,
+                                        },
+                                    )
+                                    .await
+                                {
+                                    error!("Failed to nack message: {}", e);
+                                }
                             }
                         }
                     }

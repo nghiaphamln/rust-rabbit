@@ -50,9 +50,10 @@ use std::time::Duration;
 ///     dead_letter_queue: None,
 /// };
 /// ```
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum DelayStrategy {
     /// TTL-based delays using temporary queues (no plugin required)
+    #[default]
     TTL,
     /// RabbitMQ delayed message exchange plugin (requires x-delayed-message plugin)
     ///
@@ -60,16 +61,10 @@ pub enum DelayStrategy {
     /// will cause your application to crash with "NOT_FOUND - operation not permitted on this exchange" error.
     ///
     /// Before deploying code with `DelayedExchange`, ensure:
-    /// 1. Plugin is installed: https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases
+    /// 1. Plugin is installed: <https://github.com/rabbitmq/rabbitmq-delayed-message-exchange/releases>
     /// 2. Plugin is enabled: `rabbitmq-plugins enable rabbitmq_delayed_message_exchange`
     /// 3. RabbitMQ is restarted after plugin installation
     DelayedExchange,
-}
-
-impl Default for DelayStrategy {
-    fn default() -> Self {
-        Self::TTL
-    }
 }
 
 /// Retry mechanism configuration

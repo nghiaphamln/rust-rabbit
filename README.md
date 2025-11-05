@@ -21,7 +21,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rust-rabbit = "1.1"
+rust-rabbit = "1.2"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 ```
@@ -80,11 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_prefetch(5)
         .build();
     
-    consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
-        println!("Processing order {}: ${}", msg.data.id, msg.data.amount);
+    // Handler receives just the payload type (no wrapper)
+    consumer.consume(|msg: Order| async move {
+        println!("Processing order {}: ${}", msg.id, msg.amount);
         
         // Your business logic here
-        if msg.data.amount > 1000.0 {
+        if msg.amount > 1000.0 {
             return Err("Amount too high".into()); // Will retry
         }
         
@@ -304,6 +305,139 @@ use std::time::Duration;
 
 See [dlq_ttl_example.rs](examples/dlq_ttl_example.rs) for complete example.
 
+## 🔗 **MassTransit Integration** (v1.2.0)
+
+rust-rabbit seamlessly integrates with C# services using [MassTransit](https://github.com/MassTransit/MassTransit). You can both **consume** and **publish** MassTransit-compatible messages.
+
+### Publishing to MassTransit Services
+
+**New in v1.2.0**: Publish messages that MassTransit will accept and route correctly. Use the `with_masstransit()` option:
+
+```rust
+use rust_rabbit::{Connection, Publisher, PublishOptions};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct OrderCreated {
+    order_id: u32,
+    amount: f64,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::new("amqp://localhost:5672").await?;
+    let publisher = Publisher::new(connection);
+    
+    let order = OrderCreated { order_id: 123, amount: 99.99 };
+    
+    // Simple: Just enable MassTransit with message type
+    publisher.publish_to_exchange(
+        "order-exchange",
+        "order.created",
+        &order,
+        Some(PublishOptions::new().with_masstransit("Contracts:OrderCreated"))
+    ).await?;
+    
+    // Advanced: Full MassTransit options
+    use rust_rabbit::MassTransitOptions;
+    let mt_options = MassTransitOptions::new("Contracts:OrderCreated")
+        .with_correlation_id("correlation-12345");
+    
+    publisher.publish_to_queue(
+        "order-queue",
+        &order,
+        Some(PublishOptions::new().with_masstransit_options(mt_options))
+    ).await?;
+    
+    Ok(())
+}
+```
+
+**Key Features:**
+- ✅ **Message Type Format**: Accepts `"Namespace:TypeName"` or `"urn:message:Namespace:TypeName"` (auto-converts to URN)
+- ✅ **Full Compatibility**: Sets `messageType` array in envelope body and `MT-Host-MessageType` header
+- ✅ **Validation**: Messages pass MassTransit's strict validation (won't go to skip queue)
+- ✅ **Backward Compatible**: Existing code works without changes (MassTransit is optional)
+
+See [masstransit_option_example.rs](examples/masstransit_option_example.rs) for complete examples.
+
+### Consuming MassTransit Messages
+
+When a C# service publishes messages via MassTransit's `IBus`, rust-rabbit automatically:
+- Detects MassTransit's camelCase JSON envelope format
+- Extracts the actual message payload from the `message` field
+- Preserves `correlationId` for tracking operations
+- Maintains all existing retry logic
+
+```rust
+use rust_rabbit::{Connection, Consumer, RetryConfig};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OrderMessage {
+    order_id: u32,
+    customer_name: String,
+    amount: f64,
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let connection = Connection::new("amqp://localhost:5672").await?;
+    
+    let consumer = Consumer::builder(connection, "order_queue")
+        .with_retry(RetryConfig::exponential_default())
+        .build();
+    
+    // Handler receives just the payload (no wrapper)
+    consumer.consume(|msg: OrderMessage| async move {
+        println!("Order ID: {}", msg.order_id);
+        // Your business logic here
+        Ok(())
+    }).await?;
+    
+    Ok(())
+}
+```
+
+### How It Works
+
+**Publishing:**
+1. When `with_masstransit()` is used, your message is wrapped in MassTransit's envelope format
+2. Message type is set as an array of URNs: `["urn:message:Namespace:TypeName"]`
+3. All required fields are auto-populated (messageId, sentTime, sourceAddress, etc.)
+4. MassTransit services will accept and route the message correctly
+
+**Consuming:**
+1. **Automatic Format Detection**: The consumer tries to deserialize as MassTransit format first, then falls back to rust-rabbit format
+2. **Message Extraction**: MassTransit's `message` field is automatically extracted to your Rust type
+3. **Correlation Tracking**: The `correlationId` from MassTransit is preserved for retries
+4. **Retry Compatibility**: Failed messages are retried using rust-rabbit's format (simpler, maintains retry tracking)
+
+### MassTransit Message Format
+
+MassTransit wraps messages in this structure (camelCase JSON):
+```json
+{
+  "messageId": "guid",
+  "correlationId": "guid",
+  "sourceAddress": "rabbitmq://...",
+  "destinationAddress": "rabbitmq://...",
+  "messageType": ["urn:message:Contracts:OrderCreated"],
+  "sentTime": "2024-01-01T12:00:00Z",
+  "message": {
+    // Your actual message payload here
+    "orderId": 123,
+    "amount": 99.99
+  }
+}
+```
+
+rust-rabbit automatically handles both publishing and consuming this format seamlessly.
+
+See examples:
+- [MassTransit Option Example](examples/masstransit_option_example.rs) - Publishing with MassTransit option
+- [MassTransit Publisher Example](examples/masstransit_publisher_example.rs) - Using dedicated MassTransit methods
+
 ## ⚙️ **Advanced Features**
 
 ### MessageEnvelope System
@@ -405,6 +539,8 @@ See the [`examples/`](examples/) directory for complete working examples:
 
 - **[Basic Publisher](examples/basic_publisher.rs)** - Simple message publishing
 - **[Basic Consumer](examples/basic_consumer.rs)** - Simple message consumption  
+- **[MassTransit Option Example](examples/masstransit_option_example.rs)** - Publishing with MassTransit option
+- **[MassTransit Publisher Example](examples/masstransit_publisher_example.rs)** - Using dedicated MassTransit methods
 - **[Retry Examples](examples/retry_examples.rs)** - Different retry configurations
 - **[Delayed Exchange Example](examples/delayed_exchange_example.rs)** - Using rabbitmq_delayed_message_exchange plugin
 - **[DLQ TTL Example](examples/dlq_ttl_example.rs)** - Auto-cleanup Dead Letter Queue with TTL

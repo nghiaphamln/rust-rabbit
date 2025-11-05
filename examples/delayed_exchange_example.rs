@@ -21,7 +21,7 @@
 //! 5. Consumer retries processing the message
 //! 6. After max retries exceeded, message goes to DLQ
 
-use rust_rabbit::{Connection, Consumer, DelayStrategy, Message, Publisher, RetryConfig};
+use rust_rabbit::{Connection, Consumer, DelayStrategy, Publisher, RetryConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -87,25 +87,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let counter = attempt_counter.clone();
     consumer
-        .consume(move |msg: Message<Task>| {
+        .consume(move |msg: Task| {
             let counter = counter.clone();
             async move {
-                let _attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
                 info!(
                     "Processing task {} (attempt {}): {}",
-                    msg.data.id,
-                    msg.retry_attempt + 1,
-                    msg.data.name
+                    msg.id, attempt, msg.name
                 );
 
                 // Simulate processing with occasional failures
-                if msg.data.id.is_multiple_of(2) && msg.retry_attempt < 2 {
+                if msg.id.is_multiple_of(2) && attempt < 3 {
                     // Fail even-numbered tasks on first 2 attempts
-                    warn!("  ❌ Processing failed for task {}", msg.data.id);
+                    warn!("  ❌ Processing failed for task {}", msg.id);
                     return Err("Processing error".into());
                 }
 
-                if msg.data.id == 3 && msg.retry_attempt == 0 {
+                if msg.id == 3 && attempt == 1 {
                     // Fail task 3 on first attempt
                     warn!("  ❌ Processing failed for task 3");
                     return Err("Processing error".into());
@@ -114,8 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Success
                 info!(
                     "  ✓ Task {} processed successfully after {} attempt(s)",
-                    msg.data.id,
-                    msg.retry_attempt + 1
+                    msg.id, attempt
                 );
                 Ok(())
             }

@@ -150,12 +150,13 @@
 
 // Re-export main types for easy access
 pub use connection::Connection;
-pub use consumer::{Consumer, ConsumerBuilder, Message};
+pub use consumer::{Consumer, ConsumerBuilder};
 pub use error::{Result, RustRabbitError};
 pub use message::{
-    ErrorRecord, ErrorType, MessageEnvelope, MessageMetadata, MessageSource, WireMessage,
+    ErrorRecord, ErrorType, MassTransitEnvelope, MessageEnvelope, MessageMetadata, MessageSource,
+    WireMessage,
 };
-pub use publisher::{PublishOptions, Publisher};
+pub use publisher::{MassTransitOptions, PublishOptions, Publisher};
 pub use retry::{DelayStrategy, RetryConfig, RetryMechanism};
 
 // Internal modules
@@ -169,9 +170,10 @@ mod retry;
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        Connection, Consumer, ConsumerBuilder, DelayStrategy, ErrorRecord, ErrorType, Message,
-        MessageEnvelope, MessageMetadata, MessageSource, PublishOptions, Publisher, Result,
-        RetryConfig, RetryMechanism, RustRabbitError, WireMessage,
+        Connection, Consumer, ConsumerBuilder, DelayStrategy, ErrorRecord, ErrorType,
+        MassTransitEnvelope, MassTransitOptions, MessageEnvelope, MessageMetadata, MessageSource,
+        PublishOptions, Publisher, Result, RetryConfig, RetryMechanism, RustRabbitError,
+        WireMessage,
     };
 }
 

@@ -5,6 +5,7 @@
 //! - Retry tracking (attempt count, max retries)
 //! - Error history for debugging failed messages
 //! - Timestamps for monitoring and debugging
+//! - MassTransit integration support
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,192 @@ use std::collections::HashMap;
 pub struct WireMessage<T> {
     pub data: T,
     pub retry_attempt: u32,
+}
+
+/// MassTransit message envelope format (C# camelCase JSON)
+///
+/// This structure matches MassTransit's message envelope format for integration
+/// with C# services using MassTransit's IBus.
+///
+/// MassTransit wraps messages in this format when publishing via IBus.
+/// The actual message payload is in the `message` field.
+///
+/// According to MassTransit documentation, messageType should be an array of URNs
+/// in the format: "urn:message:Namespace:TypeName"
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MassTransitEnvelope {
+    /// Auto-generated message ID (Guid in C#)
+    #[serde(default)]
+    pub message_id: Option<String>,
+
+    /// Correlation ID for tracking operations (Guid? in C#)
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+
+    /// Source address (Uri in C#)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_address: Option<String>,
+
+    /// Destination address (Uri in C#)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_address: Option<String>,
+
+    /// Sent time (DateTime? in C#)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_time: Option<DateTime<Utc>>,
+
+    /// Message type array - array of URNs in format "urn:message:Namespace:TypeName"
+    /// This is required for MassTransit to properly route messages
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_type: Option<Vec<String>>,
+
+    /// Headers (Dictionary<string, object> in C#)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, serde_json::Value>>,
+
+    /// The actual message payload (this is what we care about)
+    /// MassTransit wraps the actual message in this field
+    pub message: serde_json::Value,
+}
+
+impl MassTransitEnvelope {
+    /// Create a new MassTransit envelope with a message payload
+    /// This automatically generates a message ID (Guid format) and sets sent_time
+    pub fn new<T>(message: &T) -> Result<Self, serde_json::Error>
+    where
+        T: Serialize,
+    {
+        let message_json = serde_json::to_value(message)?;
+
+        Ok(Self {
+            message_id: Some(uuid::Uuid::new_v4().to_string()),
+            correlation_id: None,
+            source_address: None,
+            destination_address: None,
+            sent_time: Some(Utc::now()),
+            message_type: None,
+            headers: None,
+            message: message_json,
+        })
+    }
+
+    /// Convert message type string to URN format if needed
+    /// Accepts "Namespace:TypeName" or "urn:message:Namespace:TypeName"
+    fn normalize_message_type(message_type: &str) -> String {
+        if message_type.starts_with("urn:message:") {
+            message_type.to_string()
+        } else {
+            format!("urn:message:{}", message_type)
+        }
+    }
+
+    /// Create a MassTransit envelope with message type for proper routing
+    /// MassTransit uses message type names for routing (e.g., "YourNamespace:YourMessageType")
+    /// The message type will be added as an array in the envelope body AND in headers for full compatibility
+    ///
+    /// Message type can be in format:
+    /// - "Namespace:TypeName" (will be converted to "urn:message:Namespace:TypeName")
+    /// - "urn:message:Namespace:TypeName" (used as-is)
+    pub fn with_message_type<T>(message: &T, message_type: &str) -> Result<Self, serde_json::Error>
+    where
+        T: Serialize,
+    {
+        let mut envelope = Self::new(message)?;
+
+        // Normalize message type to URN format
+        let urn_type = Self::normalize_message_type(message_type);
+
+        // Add message type to envelope body (required by MassTransit)
+        envelope.message_type = Some(vec![urn_type.clone()]);
+
+        // Also add to headers for full compatibility (MT-Host-MessageType header)
+        let mut headers = HashMap::new();
+        let message_type_array = vec![serde_json::Value::String(urn_type)];
+        headers.insert(
+            "MT-Host-MessageType".to_string(),
+            serde_json::Value::Array(message_type_array),
+        );
+        envelope.headers = Some(headers);
+
+        Ok(envelope)
+    }
+
+    /// Set correlation ID for tracking operations
+    pub fn with_correlation_id(mut self, correlation_id: impl Into<String>) -> Self {
+        self.correlation_id = Some(correlation_id.into());
+        self
+    }
+
+    /// Set source address (typically "rabbitmq://host/exchange")
+    pub fn with_source_address(mut self, source_address: impl Into<String>) -> Self {
+        self.source_address = Some(source_address.into());
+        self
+    }
+
+    /// Set destination address (typically "rabbitmq://host/queue")
+    pub fn with_destination_address(mut self, destination_address: impl Into<String>) -> Self {
+        self.destination_address = Some(destination_address.into());
+        self
+    }
+
+    /// Add custom header
+    pub fn with_header(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        if self.headers.is_none() {
+            self.headers = Some(HashMap::new());
+        }
+        if let Some(ref mut headers) = self.headers {
+            headers.insert(key.into(), value);
+        }
+        self
+    }
+
+    /// Set message type in envelope body and headers (required for MassTransit routing)
+    /// MassTransit expects message types as an array in both envelope body and MT-Host-MessageType header
+    /// Message type can be in format "Namespace:TypeName" or "urn:message:Namespace:TypeName"
+    pub fn with_message_type_header(mut self, message_type: &str) -> Self {
+        // Normalize to URN format
+        let urn_type = Self::normalize_message_type(message_type);
+
+        // Add to envelope body
+        self.message_type = Some(vec![urn_type.clone()]);
+
+        // Add to headers
+        if self.headers.is_none() {
+            self.headers = Some(HashMap::new());
+        }
+        if let Some(ref mut headers) = self.headers {
+            let message_type_array = vec![serde_json::Value::String(urn_type)];
+            headers.insert(
+                "MT-Host-MessageType".to_string(),
+                serde_json::Value::Array(message_type_array),
+            );
+        }
+        self
+    }
+
+    /// Extract the actual message payload as the specified type
+    pub fn extract_message<T>(&self) -> Result<T, serde_json::Error>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        serde_json::from_value(self.message.clone())
+    }
+
+    /// Get correlation ID if present
+    pub fn correlation_id(&self) -> Option<&str> {
+        self.correlation_id.as_deref()
+    }
+
+    /// Get message ID if present
+    pub fn message_id(&self) -> Option<&str> {
+        self.message_id.as_deref()
+    }
+
+    /// Try to deserialize a MassTransit envelope from JSON bytes
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
 }
 
 /// Message envelope that wraps the actual payload with metadata
@@ -328,5 +515,67 @@ mod tests {
         assert!(summary.contains("failed after 2 attempts"));
         assert!(summary.contains("Invalid data format"));
         assert!(summary.contains("PERMANENT"));
+    }
+
+    #[test]
+    fn test_masstransit_envelope_deserialization() {
+        // Simulate MassTransit JSON format (camelCase)
+        let masstransit_json = r#"{
+            "messageId": "123e4567-e89b-12d3-a456-426614174000",
+            "correlationId": "987fcdeb-51a2-43d7-b890-123456789abc",
+            "sourceAddress": "rabbitmq://localhost/test",
+            "destinationAddress": "rabbitmq://localhost/queue",
+            "message": {
+                "id": 123,
+                "name": "test message"
+            }
+        }"#;
+
+        let envelope: MassTransitEnvelope = serde_json::from_str(masstransit_json).unwrap();
+
+        assert_eq!(
+            envelope.message_id,
+            Some("123e4567-e89b-12d3-a456-426614174000".to_string())
+        );
+        assert_eq!(
+            envelope.correlation_id,
+            Some("987fcdeb-51a2-43d7-b890-123456789abc".to_string())
+        );
+
+        // Extract the actual message
+        let payload: TestPayload = envelope.extract_message().unwrap();
+        assert_eq!(payload.id, 123);
+        assert_eq!(payload.name, "test message");
+    }
+
+    #[test]
+    fn test_masstransit_envelope_minimal() {
+        // Minimal MassTransit envelope (only message field)
+        let minimal_json = r#"{
+            "message": {
+                "id": 456,
+                "name": "minimal test"
+            }
+        }"#;
+
+        let envelope: MassTransitEnvelope = serde_json::from_str(minimal_json).unwrap();
+        assert_eq!(envelope.message_id, None);
+        assert_eq!(envelope.correlation_id, None);
+
+        let payload: TestPayload = envelope.extract_message().unwrap();
+        assert_eq!(payload.id, 456);
+        assert_eq!(payload.name, "minimal test");
+    }
+
+    #[test]
+    fn test_masstransit_correlation_id_extraction() {
+        let json = r#"{
+            "correlationId": "test-correlation-id",
+            "message": {"id": 1, "name": "test"}
+        }"#;
+
+        let envelope: MassTransitEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.correlation_id(), Some("test-correlation-id"));
+        assert_eq!(envelope.message_id(), None);
     }
 }
