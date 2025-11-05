@@ -50,21 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Consume messages
     consumer
-        .consume(|msg: rust_rabbit::Message<Task>| async move {
-            info!(
-                "Processing task {} (attempt {}): {}",
-                msg.data.id,
-                msg.retry_attempt + 1,
-                msg.data.name
-            );
+        .consume(|msg: Task| async move {
+            info!("Processing task {}: {}", msg.id, msg.name);
 
             // Simulate some tasks succeeding and some failing
-            if msg.data.id.is_multiple_of(3) {
-                info!("  ✓ Task {} succeeded", msg.data.id);
+            if msg.id.is_multiple_of(3) {
+                info!("  ✓ Task {} succeeded", msg.id);
                 Ok(())
             } else {
                 // This task fails and will be retried
-                info!("  ❌ Task {} failed", msg.data.id);
+                info!("  ❌ Task {} failed", msg.id);
                 Err("Processing failed".into())
             }
         })

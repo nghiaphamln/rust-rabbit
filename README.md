@@ -80,11 +80,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_prefetch(5)
         .build();
     
-    consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
-        println!("Processing order {}: ${}", msg.data.id, msg.data.amount);
+    // Handler receives just the payload type (no wrapper)
+    consumer.consume(|msg: Order| async move {
+        println!("Processing order {}: ${}", msg.id, msg.amount);
         
         // Your business logic here
-        if msg.data.amount > 1000.0 {
+        if msg.amount > 1000.0 {
             return Err("Amount too high".into()); // Will retry
         }
         
@@ -538,7 +539,8 @@ See the [`examples/`](examples/) directory for complete working examples:
 
 - **[Basic Publisher](examples/basic_publisher.rs)** - Simple message publishing
 - **[Basic Consumer](examples/basic_consumer.rs)** - Simple message consumption  
-- **[MassTransit Integration](examples/masstransit_integration.rs)** - Consume messages from C# MassTransit services
+- **[MassTransit Option Example](examples/masstransit_option_example.rs)** - Publishing with MassTransit option
+- **[MassTransit Publisher Example](examples/masstransit_publisher_example.rs)** - Using dedicated MassTransit methods
 - **[Retry Examples](examples/retry_examples.rs)** - Different retry configurations
 - **[Delayed Exchange Example](examples/delayed_exchange_example.rs)** - Using rabbitmq_delayed_message_exchange plugin
 - **[DLQ TTL Example](examples/dlq_ttl_example.rs)** - Auto-cleanup Dead Letter Queue with TTL

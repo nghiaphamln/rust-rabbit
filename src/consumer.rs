@@ -53,6 +53,9 @@ fn read_correlation_id(properties: &BasicProperties) -> Option<String> {
 }
 
 /// Create headers with retry_attempt and correlation_id
+///
+/// This function is kept for potential future use or testing scenarios
+/// where header creation is needed outside of the main message processing flow.
 #[allow(dead_code)]
 fn create_headers(retry_attempt: u32, correlation_id: Option<&str>) -> FieldTable {
     let mut headers = FieldTable::default();
@@ -710,8 +713,30 @@ impl Consumer {
                                     } else {
                                         // No more retries, send to DLQ
                                         warn!("Retry exhausted, sending to DLQ");
-                                        let payload_bytes = serde_json::to_vec(&payload)
-                                            .unwrap_or_else(|_| delivery.data.clone());
+                                        let payload_bytes = match serde_json::to_vec(&payload) {
+                                            Ok(bytes) => bytes,
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to serialize payload for DLQ: {}. Creating error payload.",
+                                                    e
+                                                );
+                                                // Create descriptive error payload instead of using raw delivery.data
+                                                serde_json::to_vec(&serde_json::json!({
+                                                    "error": "Failed to serialize payload for DLQ",
+                                                    "serialization_error": e.to_string(),
+                                                    "retry_attempt": retry_attempt,
+                                                    "original_message_size": delivery.data.len()
+                                                }))
+                                                .unwrap_or_else(|_| {
+                                                    // Last resort: minimal error message
+                                                    format!(
+                                                        r#"{{"error":"Serialization failed for DLQ","attempt":{}}}"#,
+                                                        retry_attempt
+                                                    )
+                                                    .into_bytes()
+                                                })
+                                            }
+                                        };
                                         if let Err(e) = consumer_self
                                             .send_to_dlq_simple(&channel_clone, &payload_bytes)
                                             .await
@@ -728,8 +753,30 @@ impl Consumer {
                                 } else {
                                     // Retry exhausted, send to DLQ
                                     warn!("Max retries reached, sending to DLQ");
-                                    let payload_bytes = serde_json::to_vec(&payload)
-                                        .unwrap_or_else(|_| delivery.data.clone());
+                                    let payload_bytes = match serde_json::to_vec(&payload) {
+                                        Ok(bytes) => bytes,
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to serialize payload for DLQ: {}. Creating error payload.",
+                                                e
+                                            );
+                                            // Create descriptive error payload instead of using raw delivery.data
+                                            serde_json::to_vec(&serde_json::json!({
+                                                "error": "Failed to serialize payload for DLQ",
+                                                "serialization_error": e.to_string(),
+                                                "retry_attempt": retry_attempt,
+                                                "original_message_size": delivery.data.len()
+                                            }))
+                                            .unwrap_or_else(|_| {
+                                                // Last resort: minimal error message
+                                                format!(
+                                                    r#"{{"error":"Serialization failed for DLQ","attempt":{}}}"#,
+                                                    retry_attempt
+                                                )
+                                                .into_bytes()
+                                            })
+                                        }
+                                    };
                                     if let Err(e) = consumer_self
                                         .send_to_dlq_simple(&channel_clone, &payload_bytes)
                                         .await

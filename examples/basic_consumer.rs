@@ -61,22 +61,21 @@ fn start_simple_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Order>| async move {
-                let order = &msg.data;
+            .consume(|msg: Order| async move {
                 info!(
                     "🔹 Simple - Processing order {} (${:.2})",
-                    order.id, order.amount
+                    msg.id, msg.amount
                 );
 
                 // Basic validation
-                if order.amount <= 0.0 {
-                    error!("Invalid amount for order {}", order.id);
+                if msg.amount <= 0.0 {
+                    error!("Invalid amount for order {}", msg.id);
                     return Err("Invalid amount".into());
                 }
 
                 // Simulate processing
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                info!("✅ Order {} processed", order.id);
+                info!("✅ Order {} processed", msg.id);
                 Ok(())
             })
             .await
@@ -95,16 +94,11 @@ fn start_retry_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Order>| async move {
-                let order = &msg.data;
-                info!(
-                    "🔄 Retry - Processing order {} (attempt {})",
-                    order.id,
-                    msg.retry_attempt + 1
-                );
+            .consume(|msg: Order| async move {
+                info!("🔄 Retry - Processing order {}", msg.id);
 
                 // Simulate different error scenarios
-                match order.status.as_str() {
+                match msg.status.as_str() {
                     "invalid" => {
                         error!("Invalid order - not retrying");
                         Ok(()) // Don't retry invalid data
@@ -116,7 +110,7 @@ fn start_retry_consumer(
                     _ => {
                         // Normal processing
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                        info!("✅ Order {} processed successfully", order.id);
+                        info!("✅ Order {} processed successfully", msg.id);
                         Ok(())
                     }
                 }
@@ -138,15 +132,14 @@ fn start_exchange_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Notification>| async move {
-                let notification = &msg.data;
+            .consume(|msg: Notification| async move {
                 info!(
                     "📧 Exchange - Processing notification for {}",
-                    notification.recipient
+                    msg.recipient
                 );
 
                 // Priority-based processing
-                let processing_time = match notification.priority {
+                let processing_time = match msg.priority {
                     9..=10 => Duration::from_millis(50), // Critical - fast
                     6..=8 => Duration::from_millis(100), // High priority
                     _ => Duration::from_millis(200),     // Normal
@@ -155,12 +148,12 @@ fn start_exchange_consumer(
                 tokio::time::sleep(processing_time).await;
 
                 // Simulate sending notification
-                if notification.recipient.contains("invalid") {
+                if msg.recipient.contains("invalid") {
                     warn!("Invalid recipient - will retry");
                     return Err("Invalid recipient".into());
                 }
 
-                info!("✅ Notification sent to {}", notification.recipient);
+                info!("✅ Notification sent to {}", msg.recipient);
                 Ok(())
             })
             .await
@@ -179,35 +172,22 @@ fn start_manual_ack_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Order>| async move {
-                let order = &msg.data;
-                info!("🤲 Manual ACK - Processing order {}", order.id);
+            .consume(|msg: Order| async move {
+                info!("🤲 Manual ACK - Processing order {}", msg.id);
 
                 // Simulate processing
                 tokio::time::sleep(Duration::from_millis(300)).await;
 
-                if order.amount > 1000.0 {
-                    info!("High value order {} - manual verification needed", order.id);
-                    // In real scenario, you might want to defer ACK until manual verification
-
-                    // For demo, we'll ACK it
-                    msg.ack().await.map_err(|e| {
-                        error!("Failed to ACK message: {}", e);
-                        e
-                    })?;
-
+                if msg.amount > 1000.0 {
+                    info!("High value order {} - manual verification needed", msg.id);
+                    // In manual_ack mode, the consumer doesn't auto-ack
+                    // The handler returns Ok/Err and the consumer handles ACK/NACK accordingly
                     info!(
-                        "✅ High value order {} manually verified and ACKed",
-                        order.id
+                        "✅ High value order {} processed (manual verification in real scenario)",
+                        msg.id
                     );
                 } else {
-                    // Normal processing - ACK immediately
-                    msg.ack().await.map_err(|e| {
-                        error!("Failed to ACK message: {}", e);
-                        e
-                    })?;
-
-                    info!("✅ Order {} processed and ACKed", order.id);
+                    info!("✅ Order {} processed", msg.id);
                 }
 
                 Ok(())

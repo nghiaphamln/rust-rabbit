@@ -50,11 +50,10 @@ fn start_exponential_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Task>| async move {
-                let task = &msg.data;
-                info!("📈 Exponential - Processing task {}", task.id);
+            .consume(|msg: Task| async move {
+                info!("📈 Exponential - Processing task {}", msg.id);
 
-                simulate_work(task, "exponential").await
+                simulate_work(&msg, "exponential").await
             })
             .await
             .map_err(|e| e.into())
@@ -72,11 +71,10 @@ fn start_linear_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Task>| async move {
-                let task = &msg.data;
-                info!("📊 Linear - Processing task {}", task.id);
+            .consume(|msg: Task| async move {
+                info!("📊 Linear - Processing task {}", msg.id);
 
-                simulate_work(task, "linear").await
+                simulate_work(&msg, "linear").await
             })
             .await
             .map_err(|e| e.into())
@@ -101,11 +99,10 @@ fn start_custom_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Task>| async move {
-                let task = &msg.data;
-                info!("🎯 Custom - Processing task {}", task.id);
+            .consume(|msg: Task| async move {
+                info!("🎯 Custom - Processing task {}", msg.id);
 
-                simulate_work(task, "custom").await
+                simulate_work(&msg, "custom").await
             })
             .await
             .map_err(|e| e.into())
@@ -123,11 +120,10 @@ fn start_no_retry_consumer(
             .build();
 
         consumer
-            .consume(|msg: rust_rabbit::Message<Task>| async move {
-                let task = &msg.data;
-                info!("🚫 No Retry - Processing task {}", task.id);
+            .consume(|msg: Task| async move {
+                info!("🚫 No Retry - Processing task {}", msg.id);
 
-                simulate_work(task, "no-retry").await
+                simulate_work(&msg, "no-retry").await
             })
             .await
             .map_err(|e| e.into())

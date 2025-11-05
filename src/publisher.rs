@@ -11,6 +11,7 @@ use lapin::{
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::debug;
+use url::Url;
 
 /// Publish options builder
 #[derive(Debug, Clone, Default)]
@@ -209,18 +210,27 @@ impl Publisher {
                 envelope = envelope.with_correlation_id(corr_id.clone());
             }
 
+            // Extract host from connection URL for MassTransit addresses
+            let host = self
+                .connection
+                .url()
+                .parse::<Url>()
+                .ok()
+                .and_then(|url| url.host_str().map(|h| h.to_string()))
+                .unwrap_or_else(|| "localhost".to_string());
+
             // Set source address (default to exchange if not provided)
             let source = mt_options
                 .source_address
                 .clone()
-                .unwrap_or_else(|| format!("rabbitmq://localhost/{}", exchange));
+                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, exchange));
             envelope = envelope.with_source_address(source);
 
             // Set destination address (default to routing key if not provided)
             let dest = mt_options
                 .destination_address
                 .clone()
-                .unwrap_or_else(|| format!("rabbitmq://localhost/{}", routing_key));
+                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, routing_key));
             envelope = envelope.with_destination_address(dest);
 
             // Serialize MassTransit envelope
@@ -416,11 +426,20 @@ impl Publisher {
             )
             .await?;
 
+        // Extract host from connection URL for MassTransit addresses
+        let host = self
+            .connection
+            .url()
+            .parse::<Url>()
+            .ok()
+            .and_then(|url| url.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "localhost".to_string());
+
         // Create MassTransit envelope with message type
         let envelope = MassTransitEnvelope::with_message_type(message, message_type)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?
-            .with_source_address(format!("rabbitmq://localhost/{}", exchange))
-            .with_destination_address(format!("rabbitmq://localhost/{}", routing_key));
+            .with_source_address(format!("rabbitmq://{}/{}", host, exchange))
+            .with_destination_address(format!("rabbitmq://{}/{}", host, routing_key));
 
         // Serialize envelope
         let payload = serde_json::to_vec(&envelope)
@@ -524,10 +543,20 @@ impl Publisher {
             )
             .await?;
 
+        // Extract host from connection URL for MassTransit addresses
+        let host = self
+            .connection
+            .url()
+            .parse::<Url>()
+            .ok()
+            .and_then(|url| url.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "localhost".to_string());
+
         // Create MassTransit envelope with message type
         let envelope = MassTransitEnvelope::with_message_type(message, message_type)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?
-            .with_destination_address(format!("rabbitmq://localhost/{}", queue));
+            .with_source_address(format!("rabbitmq://{}/{}", host, queue))
+            .with_destination_address(format!("rabbitmq://{}/{}", host, queue));
 
         // Serialize envelope
         let payload = serde_json::to_vec(&envelope)

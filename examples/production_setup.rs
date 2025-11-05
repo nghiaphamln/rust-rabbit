@@ -76,19 +76,18 @@ async fn start_order_processor(
         .build();
 
     consumer
-        .consume(move |msg: rust_rabbit::Message<OrderEvent>| {
+        .consume(move |msg: OrderEvent| {
             let stats = Arc::clone(&stats);
             async move {
-                let order = &msg.data;
-                info!("Processing order {}: ${}", order.order_id, order.amount);
+                info!("Processing order {}: ${}", msg.order_id, msg.amount);
 
                 // Simulate processing
-                if order.amount > 1000.0 {
+                if msg.amount > 1000.0 {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                 }
 
                 // Simulate occasional failures
-                if order.order_id.ends_with("999") {
+                if msg.order_id.ends_with("999") {
                     return Err("Processing failed - will retry".into());
                 }
 
@@ -98,7 +97,7 @@ async fn start_order_processor(
                     s.orders_processed += 1;
                 }
 
-                info!("✅ Order {} processed successfully", order.order_id);
+                info!("✅ Order {} processed successfully", msg.order_id);
                 Ok(())
             }
         })
@@ -118,14 +117,13 @@ async fn start_notification_processor(
         .build();
 
     consumer
-        .consume(move |msg: rust_rabbit::Message<NotificationTask>| {
+        .consume(move |msg: NotificationTask| {
             let stats = Arc::clone(&stats);
             async move {
-                let notification = &msg.data;
-                info!("Sending notification to {}", notification.recipient);
+                info!("Sending notification to {}", msg.recipient);
 
                 // Priority-based processing
-                let processing_time = match notification.priority {
+                let processing_time = match msg.priority {
                     9..=10 => Duration::from_millis(100), // Critical
                     6..=8 => Duration::from_millis(200),  // High
                     _ => Duration::from_millis(300),      // Normal
@@ -139,7 +137,7 @@ async fn start_notification_processor(
                     s.notifications_sent += 1;
                 }
 
-                info!("✅ Notification sent to {}", notification.recipient);
+                info!("✅ Notification sent to {}", msg.recipient);
                 Ok(())
             }
         })
