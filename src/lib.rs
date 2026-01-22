@@ -1,14 +1,14 @@
-//! # rust-rabbit 🐰
+//! # rust-rabbit
 //!
 //! A **simple, reliable** RabbitMQ client library for Rust.
 //! Focus on core functionality with minimal configuration.
 //!
 //! ## Features
 //!
-//! - **🚀 Simple API**: Just Publisher and Consumer with essential methods
-//! - **🔄 Flexible Retry**: Exponential, linear, or custom retry mechanisms  
-//! - **🛠️ Auto-Setup**: Automatic queue/exchange declaration and binding
-//! - **⚡ Built-in Reliability**: Default ACK behavior with error handling
+//! - **Simple API**: Just Publisher and Consumer with essential methods
+//! - **Flexible Retry**: Exponential, linear, or custom retry mechanisms  
+//! - **Auto-Setup**: Automatic queue/exchange declaration and binding
+//! - **Built-in Reliability**: Default ACK behavior with error handling
 //!
 //! ## Quick Start
 //!

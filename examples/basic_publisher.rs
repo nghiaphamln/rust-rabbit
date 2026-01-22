@@ -28,13 +28,13 @@ struct Notification {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rust_rabbit::init_tracing();
-    info!("🚀 Starting basic publisher examples");
+    info!("Starting basic publisher examples");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
     let publisher = Publisher::new(connection);
 
     // Example 1: Simple queue publishing
-    info!("📤 Publishing to queue...");
+    info!("Publishing to queue...");
 
     let order = Order {
         id: 1001,
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     publisher
         .publish_to_queue("order_queue", &order, None)
         .await?;
-    info!("✅ Order {} published to queue", order.id);
+    info!("Order {} published to queue", order.id);
 
     // Example 2: Publishing with options
     let priority_order = Order {
@@ -61,10 +61,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     publisher
         .publish_to_queue("order_queue", &priority_order, Some(options))
         .await?;
-    info!("✅ Priority order {} published", priority_order.id);
+    info!("Priority order {} published", priority_order.id);
 
     // Example 3: Exchange publishing with routing
-    info!("📤 Publishing to exchange...");
+    info!("Publishing to exchange...");
 
     let notification = Notification {
         recipient: "customer@example.com".to_string(),
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     publisher
         .publish_to_exchange("notifications", "order.confirmation", &notification, None)
         .await?;
-    info!("✅ Notification published to exchange");
+    info!("Notification published to exchange");
 
     // Example 4: High priority notification
     let urgent_notification = Notification {
@@ -94,10 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(urgent_options),
         )
         .await?;
-    info!("✅ Urgent notification published");
+    info!("Urgent notification published");
 
     // Example 5: Batch publishing
-    info!("📤 Publishing batch messages...");
+    info!("Publishing batch messages...");
 
     for i in 1..=5 {
         let batch_order = Order {
@@ -117,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .publish_to_queue("batch_orders", &batch_order, batch_options)
             .await?;
     }
-    info!("✅ Batch of 5 orders published");
+    info!("Batch of 5 orders published");
 
     // Example 6: Different routing patterns
     let routing_examples = vec![
@@ -138,9 +138,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .publish_to_exchange("events", routing_key, &routing_notification, None)
             .await?;
 
-        info!("✅ Published: {}", description);
+        info!("Published: {}", description);
     }
 
-    info!("🎉 All publishing examples completed successfully!");
+    info!("All publishing examples completed successfully!");
     Ok(())
 }

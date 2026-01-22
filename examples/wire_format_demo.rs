@@ -16,7 +16,7 @@ fn main() {
 
     // Show direct serialization (old way)
     let direct_json = serde_json::to_string_pretty(&test_msg).unwrap();
-    println!("📦 Direct message (old format):");
+    println!("Direct message (old format):");
     println!("{}", direct_json);
     println!();
 
@@ -27,11 +27,11 @@ fn main() {
     };
 
     let wire_json = serde_json::to_string_pretty(&wire_msg).unwrap();
-    println!("📦 WireMessage format (new format):");
+    println!("WireMessage format (new format):");
     println!("{}", wire_json);
     println!();
 
-    println!("✅ Publisher now wraps all messages in WireMessage format");
-    println!("✅ Consumer expects and deserializes WireMessage format");
-    println!("✅ Message includes retry_attempt tracking");
+    println!("Publisher now wraps all messages in WireMessage format");
+    println!("Consumer expects and deserializes WireMessage format");
+    println!("Message includes retry_attempt tracking");
 }

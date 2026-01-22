@@ -18,7 +18,7 @@ struct Task {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rust_rabbit::init_tracing();
-    info!("🚀 Starting retry examples");
+    info!("Starting retry examples");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_no_retry_consumer(connection.clone()),
     ];
 
-    info!("✅ All consumers started. Press Ctrl+C to stop.");
+    info!("All consumers started. Press Ctrl+C to stop.");
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
@@ -51,7 +51,7 @@ fn start_exponential_consumer(
 
         consumer
             .consume(|msg: Task| async move {
-                info!("📈 Exponential - Processing task {}", msg.id);
+                info!("Exponential - Processing task {}", msg.id);
 
                 simulate_work(&msg, "exponential").await
             })
@@ -72,7 +72,7 @@ fn start_linear_consumer(
 
         consumer
             .consume(|msg: Task| async move {
-                info!("📊 Linear - Processing task {}", msg.id);
+                info!("Linear - Processing task {}", msg.id);
 
                 simulate_work(&msg, "linear").await
             })
@@ -100,7 +100,7 @@ fn start_custom_consumer(
 
         consumer
             .consume(|msg: Task| async move {
-                info!("🎯 Custom - Processing task {}", msg.id);
+                info!("Custom - Processing task {}", msg.id);
 
                 simulate_work(&msg, "custom").await
             })
@@ -121,7 +121,7 @@ fn start_no_retry_consumer(
 
         consumer
             .consume(|msg: Task| async move {
-                info!("🚫 No Retry - Processing task {}", msg.id);
+                info!("No Retry - Processing task {}", msg.id);
 
                 simulate_work(&msg, "no-retry").await
             })
@@ -160,7 +160,7 @@ async fn simulate_work(
         };
 
         warn!(
-            "❌ {} task {} failed: {} (difficulty: {})",
+            "{} task {} failed: {} (difficulty: {})",
             retry_type, task.id, error_msg, task.difficulty
         );
 
@@ -168,7 +168,7 @@ async fn simulate_work(
     }
 
     info!(
-        "✅ {} task {} completed successfully (difficulty: {})",
+        "{} task {} completed successfully (difficulty: {})",
         retry_type, task.id, task.difficulty
     );
 
@@ -220,7 +220,7 @@ async fn publish_test_tasks() -> Result<(), Box<dyn std::error::Error>> {
 
     for (queue, task) in test_tasks {
         publisher.publish_to_queue(queue, &task, None).await?;
-        info!("📤 Published task {} to {}", task.id, queue);
+        info!("Published task {} to {}", task.id, queue);
     }
 
     Ok(())

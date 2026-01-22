@@ -28,12 +28,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("=== Dead Letter Queue with Auto-Cleanup Example ===");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
-    info!("✓ Connected to RabbitMQ");
+    info!("Connected to RabbitMQ");
 
     // Configure retry with DLQ TTL
     let retry_config = RetryConfig::exponential_default().with_dlq_ttl(Duration::from_secs(86400)); // 1 day auto-cleanup
 
-    info!("\n⚙️  Configuration:");
+    info!("\nConfiguration:");
     info!("  - Max retries: {}", retry_config.max_retries);
     info!("  - DLQ TTL: 1 day (auto-cleanup)");
     info!("  - Dead Letter Queue: task_queue.dlq");
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_retry(retry_config)
         .build();
 
-    info!("\n🔄 Starting consumer...\n");
+    info!("\nStarting consumer...\n");
 
     // Consume messages
     consumer
@@ -53,11 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Simulate some tasks succeeding and some failing
             if msg.id.is_multiple_of(3) {
-                info!("  ✓ Task {} succeeded", msg.id);
+                info!("  Task {} succeeded", msg.id);
                 Ok(())
             } else {
                 // This task fails and will be retried
-                info!("  ❌ Task {} failed", msg.id);
+                info!("  Task {} failed", msg.id);
                 Err("Processing failed".into())
             }
         })
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Task arrives in queue
 ///     ↓
 /// Handler processes message
-///     ├─ SUCCESS? → ACK message (done) ✓
+///     ├─ SUCCESS? → ACK message (done)
 ///     └─ FAIL? → Retry logic triggered
 ///         ├─ Retry attempt < max_retries?
 ///         │   └─ YES → Send to retry queue (exponential backoff: 1s→2s→4s→8s→16s)
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///                 ├─ Message stored in DLQ
 ///                 ├─ TTL: 86400 seconds (1 day)
 ///                 ├─ After 1 day: message auto-deleted by RabbitMQ
-///                 └─ ⚠️ No manual cleanup needed!
+///                 └─ No manual cleanup needed!
 /// ```
 ///
 /// ## DLQ TTL Options

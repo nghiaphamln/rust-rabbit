@@ -2,7 +2,7 @@
 //!
 //! This example shows how to use the DelayedExchange strategy for retrying failed messages.
 //!
-//! **⚠️ CRITICAL REQUIREMENT**: This example REQUIRES the `rabbitmq_delayed_message_exchange` plugin.
+//! **CRITICAL REQUIREMENT**: This example REQUIRES the `rabbitmq_delayed_message_exchange` plugin.
 //! Without it, the application will crash when trying to send messages to the delay exchange.
 //!
 //! **Setup Steps**:
@@ -45,13 +45,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connection
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
-    info!("✓ Connected to RabbitMQ");
+    info!("Connected to RabbitMQ");
 
     // Setup publisher to publish test messages
     let publisher = Publisher::new(connection.clone());
 
     // Publish some test messages
-    info!("\n📤 Publishing test messages...");
+    info!("\nPublishing test messages...");
     for i in 1..=3 {
         let task = Task {
             id: i,
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let retry_config = RetryConfig::exponential(3, Duration::from_secs(2), Duration::from_secs(30))
         .with_delay_strategy(DelayStrategy::DelayedExchange); // Use delayed exchange!
 
-    info!("\n⚙️  Consumer Configuration:");
+    info!("\nConsumer Configuration:");
     info!("  - Strategy: DelayedExchange (rabbitmq_delayed_message_exchange plugin)");
     info!("  - Max retries: {}", retry_config.max_retries);
     info!("  - Backoff: Exponential (2s base, 30s max)");
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Track how many times each message is processed
     let attempt_counter = Arc::new(AtomicU32::new(0));
 
-    info!("\n🔄 Starting consumer with delayed exchange retry strategy...\n");
+    info!("\nStarting consumer with delayed exchange retry strategy...\n");
 
     let counter = attempt_counter.clone();
     consumer
@@ -97,19 +97,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Simulate processing with occasional failures
                 if msg.id.is_multiple_of(2) && attempt < 3 {
                     // Fail even-numbered tasks on first 2 attempts
-                    warn!("  ❌ Processing failed for task {}", msg.id);
+                    warn!("  Processing failed for task {}", msg.id);
                     return Err("Processing error".into());
                 }
 
                 if msg.id == 3 && attempt == 1 {
                     // Fail task 3 on first attempt
-                    warn!("  ❌ Processing failed for task 3");
+                    warn!("  Processing failed for task 3");
                     return Err("Processing error".into());
                 }
 
                 // Success
                 info!(
-                    "  ✓ Task {} processed successfully after {} attempt(s)",
+                    "  Task {} processed successfully after {} attempt(s)",
                     msg.id, attempt
                 );
                 Ok(())
@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// - Task arrives in queue
 /// - Handler processes successfully
 /// - Message acknowledged
-/// - ✓ Done (no retries needed)
+/// - Done (no retries needed)
 ///
 /// **Scenario 2: Success After Retry**
 /// - Task arrives in queue
@@ -134,14 +134,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// - Message published to delay exchange with exponential backoff (2s base, 30s max)
 /// - After 2s, message requeued to task_queue
 /// - Handler processes successfully (attempt 2)
-/// - ✓ Done (1 retry used)
+/// - Done (1 retry used)
 ///
 /// **Scenario 3: Exhausted Retries**
 /// - Task arrives in queue
 /// - Handler fails (attempts 1, 2, 3)
 /// - After attempt 3 failure, max retries exceeded
 /// - Message sent to Dead Letter Queue (task_queue.dlq)
-/// - ⚠️ Manual intervention needed
+/// - Manual intervention needed
 ///
 /// **Advantages of DelayedExchange over TTL:**
 /// - More precise timing (RabbitMQ manages delays server-side)

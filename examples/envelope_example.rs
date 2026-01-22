@@ -18,13 +18,13 @@ struct Order {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rust_rabbit::init_tracing();
 
-    println!("🚀 Starting MessageEnvelope example");
+    println!("Starting MessageEnvelope example");
 
     // Connect to RabbitMQ
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
     // Example 1: Publishing with envelope
-    println!("\n📤 Publishing messages with envelopes...");
+    println!("\nPublishing messages with envelopes...");
 
     let publisher = Publisher::new(connection.clone());
 
@@ -40,10 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .publish_with_envelope_to_queue("order_queue", &order, 5, None)
         .await?;
 
-    println!(
-        "✅ Published order {} with envelope (max 5 retries)",
-        order.id
-    );
+    println!("Published order {} with envelope (max 5 retries)", order.id);
 
     // Example 2: Manual envelope creation
     let envelope = MessageEnvelope::new(order.clone(), "order_queue")
@@ -55,10 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .publish_envelope_to_queue("priority_orders", &envelope, None)
         .await?;
 
-    println!("✅ Published priority order with custom envelope");
+    println!("Published priority order with custom envelope");
 
     // Example 3: Consuming with envelope support
-    println!("\n📥 Starting envelope consumer...");
+    println!("\nStarting envelope consumer...");
 
     let consumer = Consumer::builder(connection, "order_queue")
         .with_retry(RetryConfig::exponential(
@@ -75,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let order = &envelope.payload;
 
             println!(
-                "🔄 Processing order {} (attempt {}/{}, id: {})",
+                "Processing order {} (attempt {}/{}, id: {})",
                 order.id,
                 envelope.metadata.retry_attempt + 1,
                 envelope.metadata.max_retries + 1,
@@ -85,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Simulate processing logic with potential errors
             match order.status.as_str() {
                 "pending" => {
-                    println!("✅ Order {} processed successfully", order.id);
+                    println!("Order {} processed successfully", order.id);
                     Ok(())
                 }
                 "invalid" => {
@@ -105,10 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .into())
                 }
                 _ => {
-                    println!(
-                        "✅ Order {} processed with status: {}",
-                        order.id, order.status
-                    );
+                    println!("Order {} processed with status: {}", order.id, order.status);
                     Ok(())
                 }
             }

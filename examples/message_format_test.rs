@@ -15,7 +15,7 @@ struct TestMessage {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().init();
 
-    println!("🧪 Testing message format...");
+    println!("Testing message format...");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
@@ -26,25 +26,25 @@ async fn main() -> anyhow::Result<()> {
         content: "Hello World!".to_string(),
     };
 
-    println!("📤 Publishing message: {:?}", test_msg);
+    println!("Publishing message: {:?}", test_msg);
     publisher
         .publish_to_queue("test_format_queue", &test_msg, None)
         .await?;
-    println!("✅ Message published successfully");
+    println!("Message published successfully");
 
     // Test Consumer (run briefly then exit)
     let consumer = Consumer::builder(connection, "test_format_queue")
         .with_retry(RetryConfig::no_retry())
         .build();
 
-    println!("📥 Starting consumer...");
+    println!("Starting consumer...");
 
     // Process messages
     consumer
         .consume(|msg: TestMessage| async move {
-            println!("🎯 Received message:");
+            println!("Received message:");
             println!("  - Data: {:?}", msg);
-            println!("✅ Message format test successful!");
+            println!("Message format test successful!");
 
             // For demo purposes, exit after first message
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;

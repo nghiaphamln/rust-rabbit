@@ -29,7 +29,7 @@ struct Notification {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rust_rabbit::init_tracing();
-    info!("🚀 Starting basic consumer examples");
+    info!("Starting basic consumer examples");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
 
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_manual_ack_consumer(connection.clone()),
     ];
 
-    info!("✅ All consumers started. Press Ctrl+C to stop.");
+    info!("All consumers started. Press Ctrl+C to stop.");
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c().await?;
@@ -62,10 +62,7 @@ fn start_simple_consumer(
 
         consumer
             .consume(|msg: Order| async move {
-                info!(
-                    "🔹 Simple - Processing order {} (${:.2})",
-                    msg.id, msg.amount
-                );
+                info!("Simple - Processing order {} (${:.2})", msg.id, msg.amount);
 
                 // Basic validation
                 if msg.amount <= 0.0 {
@@ -75,7 +72,7 @@ fn start_simple_consumer(
 
                 // Simulate processing
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                info!("✅ Order {} processed", msg.id);
+                info!("Order {} processed", msg.id);
                 Ok(())
             })
             .await
@@ -95,7 +92,7 @@ fn start_retry_consumer(
 
         consumer
             .consume(|msg: Order| async move {
-                info!("🔄 Retry - Processing order {}", msg.id);
+                info!("Retry - Processing order {}", msg.id);
 
                 // Simulate different error scenarios
                 match msg.status.as_str() {
@@ -110,7 +107,7 @@ fn start_retry_consumer(
                     _ => {
                         // Normal processing
                         tokio::time::sleep(Duration::from_millis(200)).await;
-                        info!("✅ Order {} processed successfully", msg.id);
+                        info!("Order {} processed successfully", msg.id);
                         Ok(())
                     }
                 }
@@ -133,10 +130,7 @@ fn start_exchange_consumer(
 
         consumer
             .consume(|msg: Notification| async move {
-                info!(
-                    "📧 Exchange - Processing notification for {}",
-                    msg.recipient
-                );
+                info!("Exchange - Processing notification for {}", msg.recipient);
 
                 // Priority-based processing
                 let processing_time = match msg.priority {
@@ -153,7 +147,7 @@ fn start_exchange_consumer(
                     return Err("Invalid recipient".into());
                 }
 
-                info!("✅ Notification sent to {}", msg.recipient);
+                info!("Notification sent to {}", msg.recipient);
                 Ok(())
             })
             .await
@@ -173,7 +167,7 @@ fn start_manual_ack_consumer(
 
         consumer
             .consume(|msg: Order| async move {
-                info!("🤲 Manual ACK - Processing order {}", msg.id);
+                info!("Manual ACK - Processing order {}", msg.id);
 
                 // Simulate processing
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -183,11 +177,11 @@ fn start_manual_ack_consumer(
                     // In manual_ack mode, the consumer doesn't auto-ack
                     // The handler returns Ok/Err and the consumer handles ACK/NACK accordingly
                     info!(
-                        "✅ High value order {} processed (manual verification in real scenario)",
+                        "High value order {} processed (manual verification in real scenario)",
                         msg.id
                     );
                 } else {
-                    info!("✅ Order {} processed", msg.id);
+                    info!("Order {} processed", msg.id);
                 }
 
                 Ok(())
@@ -238,7 +232,7 @@ async fn publish_test_messages() -> Result<(), Box<dyn std::error::Error>> {
 
     for (queue, order) in test_orders {
         publisher.publish_to_queue(queue, &order, None).await?;
-        info!("📤 Published order {} to {}", order.id, queue);
+        info!("Published order {} to {}", order.id, queue);
     }
 
     // Publish notification to exchange
@@ -251,7 +245,7 @@ async fn publish_test_messages() -> Result<(), Box<dyn std::error::Error>> {
     publisher
         .publish_to_exchange("notifications", "order.created", &notification, None)
         .await?;
-    info!("📤 Published notification to exchange");
+    info!("Published notification to exchange");
 
     Ok(())
 }

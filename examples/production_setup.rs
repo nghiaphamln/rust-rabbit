@@ -38,8 +38,8 @@ struct Stats {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
-    info!("🚀 Starting production setup");
+    rust_rabbit::init_tracing();
+    info!("Starting production setup");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;
     let stats = Arc::new(RwLock::new(Stats::default()));
@@ -53,15 +53,15 @@ async fn main() -> Result<()> {
     let _metrics_handle = tokio::spawn(start_metrics_reporter(stats.clone()));
     let _producer_handle = tokio::spawn(start_message_producer(connection.clone()));
 
-    info!("✅ All services started. Press Ctrl+C to stop.");
+    info!("All services started. Press Ctrl+C to stop.");
 
     // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
-    info!("🛑 Shutdown signal received");
+    info!("Shutdown signal received");
 
     // Wait a bit for graceful shutdown
     tokio::time::sleep(Duration::from_secs(2)).await;
-    info!("✅ Application shutdown complete");
+    info!("Application shutdown complete");
     Ok(())
 }
 
@@ -97,7 +97,7 @@ async fn start_order_processor(
                     s.orders_processed += 1;
                 }
 
-                info!("✅ Order {} processed successfully", msg.order_id);
+                info!("Order {} processed successfully", msg.order_id);
                 Ok(())
             }
         })
@@ -137,7 +137,7 @@ async fn start_notification_processor(
                     s.notifications_sent += 1;
                 }
 
-                info!("✅ Notification sent to {}", msg.recipient);
+                info!("Notification sent to {}", msg.recipient);
                 Ok(())
             }
         })
@@ -153,7 +153,7 @@ async fn start_metrics_reporter(stats: Arc<RwLock<Stats>>) -> Result<()> {
         interval.tick().await;
         let s = stats.read().await;
         info!(
-            "📊 Stats - Orders: {}, Notifications: {}, Errors: {}",
+            "Stats - Orders: {}, Notifications: {}, Errors: {}",
             s.orders_processed, s.notifications_sent, s.errors
         );
     }
