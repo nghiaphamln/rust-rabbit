@@ -139,11 +139,17 @@ impl ConsumerBuilder {
     /// This is a convenience method that modifies the retry_config if it exists
     ///
     /// # Example
-    /// ```ignore
+    /// ```rust,no_run
+    /// # use rust_rabbit::{Connection, Consumer, RetryConfig};
+    /// # use std::time::Duration;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let connection = Connection::new("amqp://localhost").await?;
     /// let consumer = Consumer::builder(connection, "orders")
     ///     .with_retry(RetryConfig::exponential_default())
     ///     .with_dlq_ttl(Duration::from_secs(86400))  // 1 day
     ///     .build();
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn with_dlq_ttl(mut self, ttl: Duration) -> Self {
         if let Some(retry_config) = self.retry_config.as_mut() {

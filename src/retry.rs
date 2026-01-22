@@ -25,30 +25,17 @@ use std::time::Duration;
 /// **Cons**: Requires RabbitMQ plugin installation
 ///
 /// # Example
-/// ```ignore
-/// use rust_rabbit::retry::{DelayStrategy, RetryConfig, RetryMechanism};
+/// ```rust
+/// use rust_rabbit::{DelayStrategy, RetryConfig};
 /// use std::time::Duration;
 ///
 /// // Using TTL strategy (default, no plugin required)
-/// let config = RetryConfig {
-///     max_retries: 3,
-///     mechanism: RetryMechanism::Exponential {
-///         base_delay: Duration::from_secs(1),
-///         max_delay: Duration::from_secs(60),
-///     },
-///     delay_strategy: DelayStrategy::TTL,
-///     dead_letter_exchange: None,
-///     dead_letter_queue: None,
-/// };
+/// let config = RetryConfig::exponential_default()
+///     .with_delay_strategy(DelayStrategy::TTL);
 ///
 /// // Using RabbitMQ delayed exchange plugin (requires plugin)
-/// let config = RetryConfig {
-///     max_retries: 3,
-///     mechanism: RetryMechanism::Linear { delay: Duration::from_secs(5) },
-///     delay_strategy: DelayStrategy::DelayedExchange,
-///     dead_letter_exchange: None,
-///     dead_letter_queue: None,
-/// };
+/// let config = RetryConfig::linear(3, Duration::from_secs(5))
+///     .with_delay_strategy(DelayStrategy::DelayedExchange);
 /// ```
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum DelayStrategy {
@@ -200,7 +187,9 @@ impl RetryConfig {
     /// Messages in DLQ will be automatically removed after this duration
     ///
     /// # Example
-    /// ```ignore
+    /// ```rust
+    /// # use rust_rabbit::RetryConfig;
+    /// # use std::time::Duration;
     /// let config = RetryConfig::exponential_default()
     ///     .with_dlq_ttl(Duration::from_secs(86400));  // 1 day
     /// ```
