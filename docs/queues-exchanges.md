@@ -1,14 +1,23 @@
-# Exchange & Queue Management Guide
+# Queues and Exchanges Guide
 
-This guide covers queue and exchange management in rust-rabbit, including automatic declaration, binding strategies, and best practices.
+This guide covers queue and exchange management in rust-rabbit, including automatic declaration, binding strategies, and routing patterns.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Automatic Declaration](#automatic-declaration)
+- [Exchange Types](#exchange-types)
+- [Routing Patterns](#routing-patterns)
+- [Queue Configuration](#queue-configuration)
+- [Best Practices](#best-practices)
 
 ## Overview
 
-rust-rabbit automatically handles queue and exchange setup, but provides flexibility when you need custom configurations. Understanding RabbitMQ's exchange types and routing helps you design effective messaging patterns.
+rust-rabbit automatically handles queue and exchange setup while providing flexibility for custom configurations. Understanding RabbitMQ's exchange types and routing helps you design effective messaging patterns.
 
 ## Automatic Declaration
 
-By default, rust-rabbit automatically creates queues and exchanges when needed.
+rust-rabbit automatically creates queues and exchanges when needed.
 
 ### Publisher Auto-Declaration
 
@@ -17,7 +26,7 @@ use rust_rabbit::Publisher;
 
 let publisher = Publisher::new(connection);
 
-// Auto-creates "order_queue" if it doesn't exist  
+// Auto-creates "order_queue" if it doesn't exist
 publisher.publish_to_queue("order_queue", &message, None).await?;
 
 // Uses existing exchange or fails if not found
@@ -31,13 +40,13 @@ use rust_rabbit::Consumer;
 
 // Auto-creates queue and exchange, binds them together
 let consumer = Consumer::builder(connection, "order_queue")
-    .bind_to_exchange("order_exchange", "new.order")    // Creates exchange if needed
+    .bind_to_exchange("order_exchange", "new.order")
     .build();
 ```
 
-## Exchange Types and Patterns
+## Exchange Types
 
-### 1. Direct Exchange (Default)
+### Direct Exchange (Default)
 
 Best for simple routing where messages go to queues with exact routing key matches.
 
@@ -47,404 +56,394 @@ publisher.publish_to_exchange("direct_exchange", "order.new", &message, None).aw
 
 // Consumer binds queue to specific routing key
 let consumer = Consumer::builder(connection, "new_orders")
-    .bind_to_exchange("direct_exchange")
-    .routing_key("order.new")              // Only receives "order.new" messages
-    .build()
-    .await?;
+    .bind_to_exchange("direct_exchange", "order.new")
+    .build();
 ```
 
-**Use cases:**
-- Task distribution
-- Simple request routing
-- Microservice communication
+Use cases:
+- Simple point-to-point messaging
+- Task distribution to specific workers
+- Direct command routing
 
-### 2. Topic Exchange
+### Topic Exchange
 
-Enables pattern-based routing with wildcards (`*` = one word, `#` = zero or more words).
+Pattern-based routing using wildcards. Messages route based on pattern matching.
 
 ```rust
-// Publisher can send various order events
-publisher.publish_to_exchange("topic_exchange", "order.created.urgent", &message, None).await?;
-publisher.publish_to_exchange("topic_exchange", "order.updated.normal", &message, None).await?;
+// Publisher sends with routing key
+publisher.publish_to_exchange("topic_exchange", "order.created.eu", &message, None).await?;
 
-// Consumer 1: All urgent orders
-let urgent_consumer = Consumer::builder(connection, "urgent_orders")
-    .bind_to_exchange("topic_exchange")
-    .routing_key("*.*.urgent")             // Matches any urgent messages
-    .build()
-    .await?;
+// Consumer binds with pattern
+// * matches exactly one word
+// # matches zero or more words
+let consumer = Consumer::builder(connection, "eu_orders")
+    .bind_to_exchange("topic_exchange", "order.*.eu")
+    .build();
 
-// Consumer 2: All order events  
-let all_orders_consumer = Consumer::builder(connection, "all_orders")
-    .bind_to_exchange("topic_exchange")
-    .routing_key("order.#")                // Matches all order.* messages
-    .build()
-    .await?;
+let consumer2 = Consumer::builder(connection, "all_orders")
+    .bind_to_exchange("topic_exchange", "order.#")
+    .build();
 ```
 
-**Use cases:**
+Wildcards:
+- `*` matches exactly one word
+- `#` matches zero or more words
+
+Use cases:
 - Event-driven architectures
-- Log routing
-- Multi-tenant systems
+- Multi-criteria routing
+- Regional or category-based distribution
 
-### 3. Fanout Exchange
+### Fanout Exchange
 
-Broadcasts messages to all bound queues, ignoring routing keys.
-
-```rust
-// Publisher broadcasts to all subscribers
-publisher.publish_to_exchange("fanout_exchange", "", &message, None).await?; // Routing key ignored
-
-// Multiple consumers receive the same message
-let consumer1 = Consumer::builder(connection, "audit_queue")
-    .bind_to_exchange("fanout_exchange")
-    .build()
-    .await?;
-
-let consumer2 = Consumer::builder(connection, "analytics_queue")  
-    .bind_to_exchange("fanout_exchange")
-    .build()
-    .await?;
-```
-
-**Use cases:**
-- Event broadcasting
-- Audit logging
-- Real-time analytics
-
-## Queue Configuration
-
-### Durable vs Transient Queues
+Broadcasts messages to all bound queues. Ignores routing keys.
 
 ```rust
-// Durable queue (survives broker restart) - DEFAULT
-let consumer = Consumer::builder(connection, "persistent_queue")
-    .build()
-    .await?;
+// Publisher ignores routing key (can be empty)
+publisher.publish_to_exchange("fanout_exchange", "", &message, None).await?;
 
-// For manual configuration, queues are durable by default
-// Transient queues would need manual declaration
+// All consumers receive the message
+let consumer1 = Consumer::builder(connection, "logger_queue")
+    .bind_to_exchange("fanout_exchange", "")
+    .build();
+
+let consumer2 = Consumer::builder(connection, "analytics_queue")
+    .bind_to_exchange("fanout_exchange", "")
+    .build();
 ```
 
-### Queue Binding Strategies
+Use cases:
+- Broadcasting events
+- Logging and monitoring
+- Cache invalidation
+- Real-time notifications
 
-```rust
-// Simple binding: queue name = routing key
-let consumer = Consumer::builder(connection, "orders")
-    .bind_to_exchange("order_exchange")
-    // routing_key defaults to queue name: "orders"
-    .build()
-    .await?;
+## Routing Patterns
 
-// Custom routing key
-let consumer = Consumer::builder(connection, "urgent_orders")
-    .bind_to_exchange("order_exchange")
-    .routing_key("order.urgent")           // Different from queue name
-    .build()
-    .await?;
+### Single Consumer Pattern
 
-// Multiple bindings (manual setup required)
-// This requires custom setup outside rust-rabbit for now
-```
-
-## Common Patterns
-
-### 1. Work Queue Pattern
-
-Distribute tasks among multiple workers.
+One queue, one consumer. Simple point-to-point messaging.
 
 ```rust
 // Producer
-let publisher = Publisher::new(connection);
-for task in tasks {
-    publisher.publish_to_queue("task_queue", &task, None).await?;
-}
+publisher.publish_to_queue("orders", &order, None).await?;
 
-// Multiple workers compete for tasks
-let worker1 = Consumer::builder(connection, "task_queue")
-    .with_prefetch(1)                        // One task at a time per worker
-    .build()
-    .await?;
-
-let worker2 = Consumer::builder(connection, "task_queue")
-    .with_prefetch(1)
-    .build()
-    .await?;
+// Consumer
+let consumer = Consumer::builder(connection, "orders")
+    .build();
 ```
 
-### 2. Publish/Subscribe Pattern
+### Multiple Consumer Pattern (Work Queue)
 
-Broadcast events to multiple subscribers.
+Multiple consumers on same queue. RabbitMQ distributes messages round-robin.
 
 ```rust
-// Publisher broadcasts events
-let publisher = Publisher::new(connection);
-publisher.publish_to_exchange("events", "user.created", &event, None).await?;
+// Consumer 1
+let consumer1 = Consumer::builder(connection, "orders")
+    .with_prefetch(5)
+    .build();
+
+// Consumer 2 (same queue)
+let consumer2 = Consumer::builder(connection, "orders")
+    .with_prefetch(5)
+    .build();
+```
+
+### Publish-Subscribe Pattern
+
+One message goes to multiple consumers via fanout exchange.
+
+```rust
+// Publisher
+publisher.publish_to_exchange("events", "", &event, None).await?;
 
 // Multiple subscribers
-let email_service = Consumer::builder(connection, "email_notifications")
-    .bind_to_exchange("events")
-    .routing_key("user.#")                 // All user events
-    .build()
-    .await?;
+let logger = Consumer::builder(connection, "log_queue")
+    .bind_to_exchange("events", "")
+    .build();
 
-let analytics_service = Consumer::builder(connection, "user_analytics")
-    .bind_to_exchange("events")  
-    .routing_key("user.created")           // Only creation events
-    .build()
-    .await?;
+let analytics = Consumer::builder(connection, "analytics_queue")
+    .bind_to_exchange("events", "")
+    .build();
 ```
 
-### 3. RPC Pattern (Request/Response)
+### Routing Pattern
 
-Simple request-response using separate queues.
+Messages route to specific queues based on routing key.
 
 ```rust
-// Request sender
-let publisher = Publisher::new(connection);
-let request_id = uuid::Uuid::new_v4().to_string();
+// Publisher with routing key
+publisher.publish_to_exchange("logs", "error", &error_log, None).await?;
+publisher.publish_to_exchange("logs", "info", &info_log, None).await?;
 
-let options = PublishOptions::new()
-    .header("reply_to", "response_queue")
-    .header("correlation_id", &request_id);
+// Consumer for errors only
+let error_consumer = Consumer::builder(connection, "error_logs")
+    .bind_to_exchange("logs", "error")
+    .build();
 
-publisher.publish_to_queue("rpc_queue", &request, Some(options)).await?;
-
-// Response handler
-let response_consumer = Consumer::builder(connection, "response_queue")
-    .build()
-    .await?;
-
-// RPC server
-let rpc_consumer = Consumer::builder(connection, "rpc_queue")
-    .build()
-    .await?;
-
-rpc_consumer.consume(|msg: rust_rabbit::Message<RpcRequest>| async move {
-    let response = process_request(request).await?;
-    
-    // Send response back (would need publisher access in real implementation)
-    publisher.publish_to_queue("response_queue", &response, None).await?;
-    Ok(())
-}).await?;
+// Consumer for all logs
+let all_consumer = Consumer::builder(connection, "all_logs")
+    .bind_to_exchange("logs", "#")
+    .build();
 ```
 
-## Manual Queue Management
+## Queue Configuration
 
-For advanced use cases, you may need manual queue management:
+### Prefetch Count
+
+Controls how many unacknowledged messages a consumer can have.
 
 ```rust
-use lapin::{Channel, options::*, types::FieldTable, ExchangeKind};
+let consumer = Consumer::builder(connection, "orders")
+    .with_prefetch(10)  // Process up to 10 messages concurrently
+    .build();
+```
 
-async fn setup_custom_topology(connection: &Connection) -> Result<(), Error> {
-    let channel = connection.create_channel().await?;
-    
-    // Create custom exchange
-    channel.exchange_declare(
-        "custom_exchange",
-        ExchangeKind::Topic,
-        ExchangeDeclareOptions {
-            durable: true,
-            auto_delete: false,
-            internal: false,
-            passive: false,
-            nowait: false,
-        },
-        FieldTable::default(),
-    ).await?;
-    
-    // Create custom queue
-    channel.queue_declare(
-        "custom_queue",
-        QueueDeclareOptions {
-            durable: true,
-            exclusive: false,
-            auto_delete: false,
-            passive: false,
-            nowait: false,
-        },
-        FieldTable::default(),
-    ).await?;
-    
-    // Bind queue to exchange
-    channel.queue_bind(
-        "custom_queue",
-        "custom_exchange", 
-        "custom.routing.key",
-        QueueBindOptions::default(),
-        FieldTable::default(),
-    ).await?;
-    
-    Ok(())
-}
+Guidelines:
+- Low prefetch (1-5): Fair distribution, lower throughput
+- Medium prefetch (10-50): Balanced performance
+- High prefetch (100+): Maximum throughput, uneven distribution
 
-// Use with Consumer
-let consumer = Consumer::builder(connection, "custom_queue")
-    .manual_declare()                      // Skip auto-declaration
-    .build()
-    .await?;
+### Durable Queues
+
+rust-rabbit creates durable queues by default. Messages survive broker restarts.
+
+```rust
+// Queues are durable by default
+let consumer = Consumer::builder(connection, "orders")
+    .build();
+// Queue "orders" will be durable
 ```
 
 ## Best Practices
 
-### 1. Naming Conventions
+### Exchange Naming
+
+Use clear, hierarchical names:
 
 ```rust
-// Good naming patterns
-"orders"                   // Simple queue names
-"order.created"           // Event-style routing keys  
-"user.service.queue"      // Service-specific queues
-"analytics.events.dlq"    // Dead letter queues
+// Good
+"order.events"
+"user.commands"
+"payment.notifications"
 
 // Avoid
-"Queue1"                  // Non-descriptive
-"super_long_queue_name_that_is_hard_to_read"  // Too long
-"queue-with-dashes"       // Use dots or underscores
+"exchange1"
+"temp"
+"test"
 ```
 
-### 2. Exchange Design
+### Queue Naming
+
+Use descriptive names that indicate purpose:
 
 ```rust
-// Organize by domain
-"order.events"            // Order-related events
-"user.events"             // User-related events
-"payment.commands"        // Payment commands
+// Good
+"order_processor"
+"email_sender"
+"payment_validator"
 
-// Use appropriate exchange types
-let events = "events";     // Fanout for broadcasting
-let commands = "commands"; // Direct for specific routing
-let logs = "logs";         // Topic for pattern matching
+// Avoid
+"queue1"
+"worker"
+"temp_queue"
 ```
 
-### 3. Queue Durability
+### Routing Key Patterns
+
+Use structured, dot-separated keys:
 
 ```rust
-// Production: Always use durable queues (default)
-let consumer = Consumer::builder(connection, "production_queue")
-    .build()
-    .await?;
+// Good
+"order.created.us"
+"user.updated.premium"
+"payment.failed.retry"
 
-// Development: Consider non-durable for testing
-// (requires manual setup for now)
+// Avoid
+"orderCreatedUS"
+"user_update"
+"payment-fail"
 ```
 
-### 4. Dead Letter Handling
+### Multiple Bindings
+
+Bind queue to multiple routing keys:
 
 ```rust
-// Automatic DLQ setup with retry
+let consumer = Consumer::builder(connection, "urgent_orders")
+    .bind_to_exchange("orders", "order.urgent.#")
+    .bind_to_exchange("orders", "order.*.high_value")
+    .build();
+```
+
+### Error Handling
+
+Always configure retry and DLQ:
+
+```rust
 let consumer = Consumer::builder(connection, "orders")
-    .with_retry(RetryConfig::exponential_default())  // Auto-creates orders.dlx/orders.dlq
-    .build()
-    .await?;
+    .with_retry(RetryConfig::exponential_default())
+    .bind_to_exchange("orders", "order.new")
+    .build();
+```
 
-// Monitor DLQs
-let dlq_consumer = Consumer::builder(connection, "orders.dlq")
-    .manual_declare()                           // DLQ already exists
-    .build()
-    .await?;
+## Common Patterns
 
-dlq_consumer.consume(|msg: rust_rabbit::Message<FailedMessage>| async move {
-    log::error!("Failed message: {:?}", failed_message);
-    // Send alert, store for investigation, etc.
+### Event Sourcing
+
+```rust
+// Publish events to topic exchange
+publisher.publish_to_exchange(
+    "domain.events",
+    "order.created",
+    &event,
+    None
+).await?;
+
+// Consumers subscribe to event patterns
+let order_consumer = Consumer::builder(connection, "order_service")
+    .bind_to_exchange("domain.events", "order.#")
+    .build();
+
+let analytics_consumer = Consumer::builder(connection, "analytics")
+    .bind_to_exchange("domain.events", "#")
+    .build();
+```
+
+### MassTransit Interoperability
+
+Consume messages from C# MassTransit services. rust-rabbit automatically detects and unwraps MassTransit envelopes:
+
+```rust
+// Consumer automatically unwraps MassTransit envelope
+let consumer = Consumer::builder(connection, "order_queue")
+    .bind_to_exchange("order-exchange", "order.created")
+    .with_retry(RetryConfig::exponential_default())
+    .build();
+
+consumer.consume(|msg: OrderMessage| async move {
+    // msg is the unwrapped payload, not the envelope
+    println!("Order ID: {}", msg.order_id);
+    println!("Amount: ${:.2}", msg.amount);
+    
+    // Process order
+    save_to_database(&msg).await?;
     Ok(())
 }).await?;
 ```
 
-## Performance Considerations
-
-### 1. Queue Distribution
+For access to envelope metadata (correlation ID, timestamps, etc.), use `consume_envelopes()`:
 
 ```rust
-// Distribute load across multiple queues
-for i in 0..4 {
-    let queue_name = format!("worker_queue_{}", i);
-    let consumer = Consumer::builder(connection.clone(), &queue_name)
-        .with_prefetch(10)
-        .build()
-        .await?;
+use rust_rabbit::MessageEnvelope;
+
+consumer.consume_envelopes(|envelope: MessageEnvelope<OrderMessage>| async move {
+    println!("Message ID: {}", envelope.metadata.message_id);
+    println!("Correlation ID: {:?}", envelope.metadata.correlation_id);
+    println!("Timestamp: {:?}", envelope.metadata.timestamp);
     
-    tokio::spawn(async move {
-        consumer.consume(|msg: rust_rabbit::Message<Task>| async move {
-            process_task(message).await
-        }).await
-    });
-}
+    // Access payload
+    let order = envelope.payload;
+    process_order(&order).await?;
+    Ok(())
+}).await?;
 ```
 
-### 2. Prefetch and Concurrency
+### Command Queue
 
 ```rust
-// High throughput: Higher concurrency
-let high_throughput = Consumer::builder(connection, "fast_queue")
-    .with_prefetch(50)                       // Process many messages in parallel
-    .build()
-    .await?;
+// Send commands to specific service
+publisher.publish_to_queue("order_service.commands", &command, None).await?;
 
-// Reliable processing: Lower concurrency  
-let reliable = Consumer::builder(connection, "important_queue")
-    .with_prefetch(1)                        // One at a time for reliability
-    .build()
-    .await?;
+// Service processes commands
+let consumer = Consumer::builder(connection, "order_service.commands")
+    .with_prefetch(5)
+    .build();
 ```
 
-### 3. Message Size Considerations
+### Multiple Queue Bindings
+
+Bind a single queue to multiple routing keys for flexible message routing:
 
 ```rust
-// For large messages, consider:
-// 1. Store in external storage, send reference
-#[derive(Serialize)]
-struct LargeMessageRef {
-    id: String,
-    storage_url: String,
-    checksum: String,
-}
+// Single queue receives messages from multiple patterns
+let consumer = Consumer::builder(connection, "priority_orders")
+    .bind_to_exchange("orders", "order.urgent.*")
+    .bind_to_exchange("orders", "order.*.high_value")
+    .bind_to_exchange("orders", "order.vip.#")
+    .with_prefetch(10)
+    .build();
 
-// 2. Use message compression (implement custom serialization)
-// 3. Split into smaller chunks
+consumer.consume(|msg: Order| async move {
+    println!("Processing priority order: {}", msg.id);
+    Ok(())
+}).await?;
 ```
+
+Note: Call `bind_to_exchange()` multiple times on the same builder to add multiple bindings.
 
 ## Troubleshooting
 
-### Common Issues
+### Messages not routing
 
-1. **Queue not found errors**
-   ```rust
-   // Ensure auto-declaration is enabled (default)
-   let consumer = Consumer::builder(connection, "queue")
-       .build()  // auto_declare is true by default
-       .await?;
-   ```
+- Check exchange type matches routing pattern
+- Verify routing key spelling
+- Confirm queue is bound to exchange
+- Check exchange exists before publishing
 
-2. **Messages not routing**
-   ```rust
-   // Check exchange type and routing key
-   let consumer = Consumer::builder(connection, "queue")
-       .bind_to_exchange("exchange")
-       .routing_key("exact.routing.key")      // Must match publisher
-       .build()
-       .await?;
-   ```
+### Queue not created
 
-3. **Duplicate message processing**
-   ```rust
-   // Ensure proper concurrency settings
-   let consumer = Consumer::builder(connection, "queue")
-       .with_prefetch(1)                        // Process one at a time if needed
-       .build()
-       .await?;
-   ```
+- Verify connection is established
+- Check RabbitMQ logs for declaration errors
+- Ensure no conflicting queue declarations
+- Verify permissions
 
-### Monitoring
+### Uneven message distribution
+
+- Check prefetch count on consumers
+- Verify consumers are actively processing
+- Review message processing time
+- Consider adjusting prefetch values
+
+## See Also
+
+- [Retry Configuration Guide](retry-guide.md) - Retry and DLQ configuration
+- [Error Handling Guide](error-handling.md) - Error handling strategies
+- [Best Practices Guide](best-practices.md) - Production deployment patterns
+
+## Quick Reference
+
+### Exchange Types Quick Guide
 
 ```rust
-// Monitor queue lengths, message rates, etc.
-// This requires external monitoring tools like:
-// - RabbitMQ Management UI (http://localhost:15672)
-// - Prometheus metrics
-// - Custom monitoring scripts
+// Direct Exchange - exact routing key match
+publisher.publish_to_exchange("direct_ex", "order.new", &msg, None).await?;
+consumer.bind_to_exchange("direct_ex", "order.new")
+
+// Topic Exchange - pattern matching with wildcards
+publisher.publish_to_exchange("topic_ex", "order.created.us", &msg, None).await?;
+consumer.bind_to_exchange("topic_ex", "order.*.us")     // * = one word
+consumer.bind_to_exchange("topic_ex", "order.#")        // # = zero or more words
+
+// Fanout Exchange - broadcast to all queues
+publisher.publish_to_exchange("fanout_ex", "", &msg, None).await?;
+consumer.bind_to_exchange("fanout_ex", "")
 ```
 
-For more information, see:
-- [Retry Configuration Guide](retry-guide.md)
-- [Error Handling](error-handling.md)
-- [Best Practices](best-practices.md)
+### Multiple Bindings Pattern
+
+```rust
+// Single queue, multiple routing patterns
+Consumer::builder(connection, "priority_queue")
+    .bind_to_exchange("orders", "order.urgent.*")
+    .bind_to_exchange("orders", "order.*.high_value")
+    .bind_to_exchange("orders", "order.vip.#")
+    .build()
+```
+
+### Common Prefetch Values
+
+- **1-5**: Fair distribution, slow processing
+- **10-20**: Balanced, general purpose (recommended default)
+- **50-100**: High throughput, fast processing
+- **100+**: Maximum throughput, may cause uneven distribution
