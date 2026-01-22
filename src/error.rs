@@ -42,10 +42,12 @@ impl RustRabbitError {
             // Connection errors are usually retryable
             RustRabbitError::Connection(_) => true,
             RustRabbitError::Protocol(lapin_error) => {
-                // Check if it's a temporary protocol error
+                // Check if it's a temporary protocol error using lapin's methods
+                // In lapin 3.7+, Error is a struct with kind() method
+                use lapin::ErrorKind;
                 matches!(
-                    lapin_error,
-                    lapin::Error::IOError(_) | lapin::Error::ProtocolError(_)
+                    lapin_error.kind(),
+                    ErrorKind::IOError(_) | ErrorKind::ProtocolError(_)
                 )
             }
             // Serialization and configuration errors are not retryable

@@ -63,8 +63,8 @@
 //!         .with_prefetch(5)
 //!         .build();
 //!     
-//!     consumer.consume(|msg: rust_rabbit::Message<Order>| async move {
-//!         println!("Processing order {}: ${}", msg.data.id, msg.data.amount);
+//!     consumer.consume(|msg: rust_rabbit::MessageEnvelope<Order>| async move {
+//!         println!("Processing order {}: ${}", msg.payload.id, msg.payload.amount);
 //!         // Your business logic here
 //!         Ok(()) // ACK message
 //!     }).await?;
