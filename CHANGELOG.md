@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.2.1] - 2026-01-22
+
+### Added
+
+- **`init_tracing()` Helper Function**: Convenient tracing setup with recommended defaults
+  - Automatically filters lapin logs to WARN+ level (eliminates spurious io_loop ERROR logs)
+  - Respects `RUST_LOG` environment variable for custom configuration
+  - Available via `rust_rabbit::init_tracing()` or in prelude
+  - Optional feature flag `tracing` (enabled by default)
+
+### Changed
+
+- All examples now use `rust_rabbit::init_tracing()` for cleaner setup
+- Improved documentation examples with better imports and context
+
+### Fixed
+
+- Fixed 3 ignored doc tests - all doc tests now compile and run successfully
+- Better error context in doc test examples
+## [1.2.1] - 2026-01-22
+
+### Added
+
+- **`init_tracing()` Helper Function**: Convenient tracing setup with recommended defaults
+  - Automatically filters lapin logs to WARN+ level (eliminates spurious io_loop ERROR logs)
+  - Respects `RUST_LOG` environment variable for custom configuration
+  - Available via `rust_rabbit::init_tracing()` or in prelude
+  - Optional feature flag `tracing` (enabled by default)
+
+### Changed
+
+- All examples now use `rust_rabbit::init_tracing()` for cleaner setup
+- Improved documentation examples with better imports and context
+
+### Fixed
+
+- Fixed 3 ignored doc tests - all doc tests now compile and run successfully
+- Better error context in doc test examples
 
 ## [1.2.0] - 2026-01-22
 
@@ -126,7 +164,19 @@ Previous versions before the major simplification revamp. These versions contain
 
 ## Upgrade Guide
 
-### From 1.1.x to 1.2.0
+### From 1.2.0 to 1.2.1
+
+No breaking changes. Optionally use the new `init_tracing()` helper:
+
+```rust
+// Old way (still works)
+tracing_subscriber::fmt().init();
+
+// New way (recommended - filters lapin noise)
+rust_rabbit::init_tracing();
+```
+
+### From 1.1.x to 1.2.x
 
 No breaking changes. All 1.1.x code continues to work. New features are opt-in:
 
