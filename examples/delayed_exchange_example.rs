@@ -38,9 +38,7 @@ struct Task {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    rust_rabbit::init_tracing();
 
     info!("=== RabbitMQ Delayed Message Exchange Retry Example ===");
     info!("This example requires the rabbitmq_delayed_message_exchange plugin");

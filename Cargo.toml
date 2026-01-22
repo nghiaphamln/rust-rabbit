@@ -24,6 +24,13 @@ url = "2.0"
 fastrand = "2.3.0"
 futures-lite = "2.0"
 
+# Optional tracing setup with recommended defaults
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+
+[features]
+default = ["tracing"]
+tracing = ["dep:tracing-subscriber"]
+
 [dev-dependencies]
 tokio-test = "0.4"
 anyhow = "1.0"

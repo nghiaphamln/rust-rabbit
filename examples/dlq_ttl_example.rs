@@ -23,9 +23,7 @@ struct Task {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup tracing
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .init();
+    rust_rabbit::init_tracing();
 
     info!("=== Dead Letter Queue with Auto-Cleanup Example ===");
 

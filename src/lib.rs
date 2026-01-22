@@ -167,6 +167,46 @@ mod message;
 mod publisher;
 mod retry;
 
+/// Initialize tracing with recommended defaults for rust-rabbit.
+///
+/// This sets up tracing with the following filters:
+/// - `info` level for general application logs
+/// - `warn` level for lapin (RabbitMQ client) to suppress spurious ERROR logs from io_loop
+///
+/// You can override the filter using the `RUST_LOG` environment variable.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use rust_rabbit::init_tracing;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     // Initialize tracing with recommended settings
+///     init_tracing();
+///     
+///     // Your application code
+///     Ok(())
+/// }
+/// ```
+///
+/// # Custom Configuration
+///
+/// To use custom log levels, set the `RUST_LOG` environment variable:
+///
+/// ```bash
+/// RUST_LOG=debug,lapin=warn cargo run
+/// ```
+#[cfg(feature = "tracing")]
+pub fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,lapin=warn"));
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+}
+
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
@@ -175,6 +215,9 @@ pub mod prelude {
         PublishOptions, Publisher, Result, RetryConfig, RetryMechanism, RustRabbitError,
         WireMessage,
     };
+
+    #[cfg(feature = "tracing")]
+    pub use crate::init_tracing;
 }
 
 #[cfg(test)]

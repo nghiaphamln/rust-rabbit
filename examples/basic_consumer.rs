@@ -28,7 +28,7 @@ struct Notification {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().init();
+    rust_rabbit::init_tracing();
     info!("🚀 Starting basic consumer examples");
 
     let connection = Connection::new("amqp://guest:guest@localhost:5672").await?;

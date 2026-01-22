@@ -16,7 +16,7 @@ struct Order {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt().init();
+    rust_rabbit::init_tracing();
 
     println!("🚀 Starting MessageEnvelope example");
 
