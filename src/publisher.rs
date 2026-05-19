@@ -163,8 +163,8 @@ impl Publisher {
     ) -> Result<(), RustRabbitError> {
         let confirm = channel
             .basic_publish(
-                exchange,
-                routing_key,
+                exchange.into(),
+                routing_key.into(),
                 BasicPublishOptions {
                     mandatory: options.mandatory,
                     immediate: options.immediate,
@@ -239,7 +239,7 @@ impl Publisher {
         // Declare exchange (simplified - always topic for flexibility)
         channel
             .exchange_declare(
-                exchange,
+                exchange.into(),
                 ExchangeKind::Topic,
                 ExchangeDeclareOptions {
                     durable: true,
@@ -268,7 +268,7 @@ impl Publisher {
         // Declare queue
         channel
             .queue_declare(
-                queue,
+                queue.into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -440,7 +440,7 @@ impl Publisher {
         // Declare exchange (MassTransit typically uses topic exchanges)
         channel
             .exchange_declare(
-                exchange,
+                exchange.into(),
                 ExchangeKind::Topic,
                 ExchangeDeclareOptions {
                     durable: true,
@@ -524,7 +524,7 @@ impl Publisher {
         // Declare queue
         channel
             .queue_declare(
-                queue,
+                queue.into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -571,7 +571,7 @@ impl Publisher {
         // Declare exchange
         channel
             .exchange_declare(
-                exchange,
+                exchange.into(),
                 ExchangeKind::Topic,
                 ExchangeDeclareOptions {
                     durable: true,
@@ -610,7 +610,7 @@ impl Publisher {
         // Declare queue
         channel
             .queue_declare(
-                queue,
+                queue.into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
