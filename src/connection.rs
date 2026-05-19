@@ -133,7 +133,7 @@ impl Connection {
     pub async fn close(&self) -> Result<(), RustRabbitError> {
         let mut conn_guard = self.inner.write().await;
         if let Some(conn) = conn_guard.take() {
-            conn.close(200, "Normal shutdown").await?;
+            conn.close(200, "Normal shutdown".into()).await?;
             info!("Connection closed");
         }
         Ok(())

@@ -239,7 +239,7 @@ impl Consumer {
 
         channel
             .queue_declare(
-                &retry_queue_name,
+                retry_queue_name.clone().into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -271,7 +271,7 @@ impl Consumer {
 
         channel
             .queue_declare(
-                &dlq_name,
+                dlq_name.clone().into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -299,8 +299,8 @@ impl Consumer {
         // Publish to retry queue
         channel
             .basic_publish(
-                "", // Default exchange
-                &retry_queue_name,
+                "".into(), // Default exchange
+                retry_queue_name.clone().into(),
                 BasicPublishOptions::default(),
                 message_data,
                 BasicProperties::default()
@@ -330,8 +330,8 @@ impl Consumer {
         // Publish to retry queue with headers
         channel
             .basic_publish(
-                "", // Default exchange
-                &retry_queue_name,
+                "".into(), // Default exchange
+                retry_queue_name.clone().into(),
                 BasicPublishOptions::default(),
                 message_data,
                 BasicProperties::default()
@@ -360,8 +360,8 @@ impl Consumer {
         // Publish to DLQ
         channel
             .basic_publish(
-                "", // Default exchange
-                &dlq_name,
+                "".into(), // Default exchange
+                dlq_name.clone().into(),
                 BasicPublishOptions::default(),
                 message_data,
                 BasicProperties::default()
@@ -390,7 +390,7 @@ impl Consumer {
 
             channel
                 .exchange_declare(
-                    &delay_exchange,
+                    delay_exchange.clone().into(),
                     lapin::ExchangeKind::Custom("x-delayed-message".to_string()),
                     lapin::options::ExchangeDeclareOptions {
                         durable: true,
@@ -427,8 +427,8 @@ impl Consumer {
         // The message will be re-delivered to original queue after delay
         channel
             .basic_publish(
-                &delay_exchange,
-                &self.queue_name, // Routing key: original queue name
+                delay_exchange.clone().into(),
+                self.queue_name.clone().into(), // Routing key: original queue name
                 BasicPublishOptions::default(),
                 message_data,
                 BasicProperties::default()
@@ -469,8 +469,8 @@ impl Consumer {
         // The message will be re-delivered to original queue after delay
         channel
             .basic_publish(
-                &delay_exchange,
-                &self.queue_name, // Routing key: original queue name
+                delay_exchange.clone().into(),
+                self.queue_name.clone().into(), // Routing key: original queue name
                 BasicPublishOptions::default(),
                 message_data,
                 BasicProperties::default()
@@ -514,8 +514,8 @@ impl Consumer {
         // Start consuming
         let mut consumer = channel
             .basic_consume(
-                &self.queue_name,
-                "",
+                self.queue_name.clone().into(),
+                "".into(),
                 BasicConsumeOptions::default(),
                 FieldTable::default(),
             )
@@ -767,7 +767,7 @@ impl Consumer {
         // Declare queue
         channel
             .queue_declare(
-                &self.queue_name,
+                self.queue_name.clone().into(),
                 QueueDeclareOptions {
                     durable: true,
                     ..Default::default()
@@ -780,9 +780,9 @@ impl Consumer {
         if let (Some(exchange), Some(routing_key)) = (&self.exchange_name, &self.routing_key) {
             channel
                 .queue_bind(
-                    &self.queue_name,
-                    exchange,
-                    routing_key,
+                    self.queue_name.clone().into(),
+                    exchange.clone().into(),
+                    routing_key.clone().into(),
                     lapin::options::QueueBindOptions::default(),
                     FieldTable::default(),
                 )
@@ -800,9 +800,9 @@ impl Consumer {
                 // Bind delay exchange to original queue
                 channel
                     .queue_bind(
-                        &self.queue_name,
-                        &delay_exchange,
-                        &self.queue_name, // Routing key: original queue name
+                        self.queue_name.clone().into(),
+                        delay_exchange.clone().into(),
+                        self.queue_name.clone().into(), // Routing key: original queue name
                         lapin::options::QueueBindOptions::default(),
                         FieldTable::default(),
                     )
@@ -844,8 +844,8 @@ impl Consumer {
         // Create consumer
         let mut consumer = channel
             .basic_consume(
-                &self.queue_name,
-                "rust-rabbit-envelope-consumer",
+                self.queue_name.clone().into(),
+                "rust-rabbit-envelope-consumer".into(),
                 BasicConsumeOptions::default(),
                 FieldTable::default(),
             )
@@ -1127,7 +1127,7 @@ impl Consumer {
                 // Declare DLQ
                 if let Err(e) = dlq_channel
                     .queue_declare(
-                        &dlq_name,
+                        dlq_name.clone().into(),
                         QueueDeclareOptions {
                             durable: true,
                             ..Default::default()
@@ -1151,8 +1151,8 @@ impl Consumer {
                 if let Ok(payload_bytes) = serde_json::to_vec(&dlq_payload) {
                     if let Err(e) = dlq_channel
                         .basic_publish(
-                            "",
-                            &dlq_name,
+                            "".into(),
+                            dlq_name.clone().into(),
                             lapin::options::BasicPublishOptions::default(),
                             &payload_bytes,
                             lapin::BasicProperties::default(),
