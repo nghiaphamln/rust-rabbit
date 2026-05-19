@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_rabbit::{ErrorRecord, MessageMetadata, MessageSource};
+    use rust_rabbit::ErrorType;
 
     #[test]
     fn test_envelope_creation() {

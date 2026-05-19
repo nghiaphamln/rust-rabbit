@@ -161,7 +161,7 @@ fn start_manual_ack_consumer(
 ) -> tokio::task::JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
     tokio::spawn(async move {
         let consumer = Consumer::builder(connection, "manual_orders")
-            .manual_ack() // Disable auto-acknowledge
+            .manual_ack() // Currently rejected at runtime until an ack handle is exposed
             .with_prefetch(2)
             .build();
 

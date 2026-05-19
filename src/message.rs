@@ -348,8 +348,11 @@ impl<T> MessageEnvelope<T> {
     }
 
     /// Check if this message has exceeded its retry limit
+    ///
+    /// `retry_attempt` tracks the number of retries already scheduled/performed.
+    /// A message is exhausted only after it has gone beyond `max_retries`.
     pub fn is_retry_exhausted(&self) -> bool {
-        self.metadata.retry_attempt >= self.metadata.max_retries
+        self.metadata.retry_attempt > self.metadata.max_retries
     }
 
     /// Check if this is the first attempt (not a retry)

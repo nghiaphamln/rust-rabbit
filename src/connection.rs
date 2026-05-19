@@ -6,7 +6,8 @@
 use crate::error::RustRabbitError;
 use lapin::{Channel, Connection as LapinConnection, ConnectionProperties};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -50,6 +51,7 @@ impl ConnectionConfig {
 #[derive(Debug)]
 pub struct Connection {
     inner: Arc<RwLock<Option<LapinConnection>>>,
+    reconnect_lock: Arc<Mutex<()>>,
     config: ConnectionConfig,
 }
 
@@ -77,6 +79,7 @@ impl Connection {
     pub async fn with_config(config: ConnectionConfig) -> Result<Arc<Self>, RustRabbitError> {
         let connection = Self {
             inner: Arc::new(RwLock::new(None)),
+            reconnect_lock: Arc::new(Mutex::new(())),
             config,
         };
 
@@ -105,11 +108,7 @@ impl Connection {
     ///
     /// Automatically reconnects if the connection is lost.
     pub async fn create_channel(&self) -> Result<Channel, RustRabbitError> {
-        // Check if we need to reconnect
-        if !self.is_connected().await {
-            warn!("Connection lost, attempting to reconnect...");
-            self.reconnect().await?;
-        }
+        self.ensure_connected().await?;
 
         let conn_guard = self.inner.read().await;
         if let Some(ref conn) = *conn_guard {
@@ -125,6 +124,7 @@ impl Connection {
 
     /// Manually reconnect
     pub async fn reconnect(&self) -> Result<(), RustRabbitError> {
+        let _guard = self.reconnect_lock.lock().await;
         info!("Reconnecting to RabbitMQ...");
         self.connect().await
     }
@@ -151,7 +151,17 @@ impl Connection {
         // Establish connection
         debug!("Connecting to RabbitMQ at {}", self.config.url);
 
-        let connection = LapinConnection::connect(&self.config.url, properties).await?;
+        let connection = tokio::time::timeout(
+            Duration::from_secs(self.config.connection_timeout),
+            LapinConnection::connect(&self.config.url, properties),
+        )
+        .await
+        .map_err(|_| {
+            RustRabbitError::Connection(format!(
+                "Connection attempt timed out after {} seconds",
+                self.config.connection_timeout
+            ))
+        })??;
 
         info!("Successfully connected to RabbitMQ");
 
@@ -161,12 +171,37 @@ impl Connection {
 
         Ok(())
     }
+
+    async fn ensure_connected(&self) -> Result<(), RustRabbitError> {
+        if self.is_connected().await {
+            return Ok(());
+        }
+
+        let _guard = self.reconnect_lock.lock().await;
+        if self.is_connected().await {
+            return Ok(());
+        }
+
+        warn!("Connection lost, attempting to reconnect...");
+        self.connect().await
+    }
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
         // Connection will be automatically closed when dropped
         debug!("Connection dropped");
+    }
+}
+
+#[cfg(test)]
+impl Connection {
+    pub(crate) fn disconnected_for_tests(url: &str) -> Arc<Self> {
+        Arc::new(Self {
+            inner: Arc::new(RwLock::new(None)),
+            reconnect_lock: Arc::new(Mutex::new(())),
+            config: ConnectionConfig::new(url),
+        })
     }
 }
 

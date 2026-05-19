@@ -118,6 +118,106 @@ pub struct Publisher {
 }
 
 impl Publisher {
+    fn connection_host(&self) -> String {
+        self.connection
+            .url()
+            .parse::<Url>()
+            .ok()
+            .and_then(|url| url.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "localhost".to_string())
+    }
+
+    fn build_properties(
+        &self,
+        options: &PublishOptions,
+        include_retry_header: bool,
+    ) -> BasicProperties {
+        let mut properties = BasicProperties::default()
+            .with_content_type("application/json".into())
+            .with_delivery_mode(2);
+
+        let mut headers = FieldTable::default();
+        if include_retry_header {
+            headers.insert("x-retry-attempt".into(), AMQPValue::LongLongInt(0));
+        }
+        properties = properties.with_headers(headers);
+
+        if let Some(expiration) = &options.expiration {
+            properties = properties.with_expiration(expiration.clone().into());
+        }
+
+        if let Some(priority) = options.priority {
+            properties = properties.with_priority(priority);
+        }
+
+        properties
+    }
+
+    async fn publish_serialized(
+        &self,
+        channel: &Channel,
+        exchange: &str,
+        routing_key: &str,
+        payload: &[u8],
+        options: &PublishOptions,
+    ) -> Result<(), RustRabbitError> {
+        let confirm = channel
+            .basic_publish(
+                exchange,
+                routing_key,
+                BasicPublishOptions {
+                    mandatory: options.mandatory,
+                    immediate: options.immediate,
+                },
+                payload,
+                self.build_properties(options, true),
+            )
+            .await?;
+
+        confirm.await?;
+        Ok(())
+    }
+
+    fn serialize_message<T>(
+        &self,
+        exchange: &str,
+        routing_key: &str,
+        message: &T,
+        options: &PublishOptions,
+    ) -> Result<Vec<u8>, RustRabbitError>
+    where
+        T: Serialize,
+    {
+        if let Some(mt_options) = &options.masstransit {
+            let mut envelope =
+                MassTransitEnvelope::with_message_type(message, &mt_options.message_type)
+                    .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
+
+            if let Some(corr_id) = &mt_options.correlation_id {
+                envelope = envelope.with_correlation_id(corr_id.clone());
+            }
+
+            let host = self.connection_host();
+            let source = mt_options
+                .source_address
+                .clone()
+                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, exchange));
+            let dest = mt_options
+                .destination_address
+                .clone()
+                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, routing_key));
+
+            serde_json::to_vec(
+                &envelope
+                    .with_source_address(source)
+                    .with_destination_address(dest),
+            )
+            .map_err(|e| RustRabbitError::Serialization(e.to_string()))
+        } else {
+            serde_json::to_vec(message).map_err(|e| RustRabbitError::Serialization(e.to_string()))
+        }
+    }
+
     /// Create a new publisher
     pub fn new(connection: Arc<Connection>) -> Self {
         Self { connection }
@@ -197,85 +297,9 @@ impl Publisher {
         T: Serialize,
     {
         let options = options.unwrap_or_default();
-
-        // Check if MassTransit conversion is requested
-        let payload = if let Some(mt_options) = &options.masstransit {
-            // Create MassTransit envelope
-            let mut envelope =
-                MassTransitEnvelope::with_message_type(message, &mt_options.message_type)
-                    .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
-
-            // Set correlation ID if provided
-            if let Some(corr_id) = &mt_options.correlation_id {
-                envelope = envelope.with_correlation_id(corr_id.clone());
-            }
-
-            // Extract host from connection URL for MassTransit addresses
-            let host = self
-                .connection
-                .url()
-                .parse::<Url>()
-                .ok()
-                .and_then(|url| url.host_str().map(|h| h.to_string()))
-                .unwrap_or_else(|| "localhost".to_string());
-
-            // Set source address (default to exchange if not provided)
-            let source = mt_options
-                .source_address
-                .clone()
-                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, exchange));
-            envelope = envelope.with_source_address(source);
-
-            // Set destination address (default to routing key if not provided)
-            let dest = mt_options
-                .destination_address
-                .clone()
-                .unwrap_or_else(|| format!("rabbitmq://{}/{}", host, routing_key));
-            envelope = envelope.with_destination_address(dest);
-
-            // Serialize MassTransit envelope
-            serde_json::to_vec(&envelope)
-                .map_err(|e| RustRabbitError::Serialization(e.to_string()))?
-        } else {
-            // Serialize raw payload (no wrapper)
-            serde_json::to_vec(message)
-                .map_err(|e| RustRabbitError::Serialization(e.to_string()))?
-        };
-
-        // Build properties with headers
-        // Create headers with retry_attempt = 0 (first attempt)
-        let mut headers = FieldTable::default();
-        headers.insert("x-retry-attempt".into(), AMQPValue::LongLongInt(0));
-
-        let mut properties = BasicProperties::default()
-            .with_content_type("application/json".into())
-            .with_delivery_mode(2) // Persistent
-            .with_headers(headers);
-
-        if let Some(expiration) = options.expiration {
-            properties = properties.with_expiration(expiration.into());
-        }
-
-        if let Some(priority) = options.priority {
-            properties = properties.with_priority(priority);
-        }
-
-        // Publish message
-        let confirm = channel
-            .basic_publish(
-                exchange,
-                routing_key,
-                BasicPublishOptions {
-                    mandatory: options.mandatory,
-                    immediate: options.immediate,
-                },
-                &payload,
-                properties,
-            )
+        let payload = self.serialize_message(exchange, routing_key, message, &options)?;
+        self.publish_serialized(channel, exchange, routing_key, &payload, &options)
             .await?;
-
-        // Wait for confirmation (simplified)
-        confirm.await?;
 
         if options.masstransit.is_some() {
             debug!(
@@ -426,14 +450,7 @@ impl Publisher {
             )
             .await?;
 
-        // Extract host from connection URL for MassTransit addresses
-        let host = self
-            .connection
-            .url()
-            .parse::<Url>()
-            .ok()
-            .and_then(|url| url.host_str().map(|h| h.to_string()))
-            .unwrap_or_else(|| "localhost".to_string());
+        let host = self.connection_host();
 
         // Create MassTransit envelope with message type
         let envelope = MassTransitEnvelope::with_message_type(message, message_type)
@@ -445,36 +462,9 @@ impl Publisher {
         let payload = serde_json::to_vec(&envelope)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
 
-        // Build properties
         let options = options.unwrap_or_default();
-        let mut properties = BasicProperties::default()
-            .with_content_type("application/json".into())
-            .with_delivery_mode(2) // Persistent
-            .with_headers(FieldTable::default());
-
-        if let Some(expiration) = options.expiration {
-            properties = properties.with_expiration(expiration.into());
-        }
-
-        if let Some(priority) = options.priority {
-            properties = properties.with_priority(priority);
-        }
-
-        // Publish message
-        let confirm = channel
-            .basic_publish(
-                exchange,
-                routing_key,
-                BasicPublishOptions {
-                    mandatory: options.mandatory,
-                    immediate: options.immediate,
-                },
-                &payload,
-                properties,
-            )
+        self.publish_serialized(&channel, exchange, routing_key, &payload, &options)
             .await?;
-
-        confirm.await?;
 
         debug!(
             "Published MassTransit message to exchange '{}' with routing key '{}' (type: {})",
@@ -543,14 +533,7 @@ impl Publisher {
             )
             .await?;
 
-        // Extract host from connection URL for MassTransit addresses
-        let host = self
-            .connection
-            .url()
-            .parse::<Url>()
-            .ok()
-            .and_then(|url| url.host_str().map(|h| h.to_string()))
-            .unwrap_or_else(|| "localhost".to_string());
+        let host = self.connection_host();
 
         // Create MassTransit envelope with message type
         let envelope = MassTransitEnvelope::with_message_type(message, message_type)
@@ -562,36 +545,9 @@ impl Publisher {
         let payload = serde_json::to_vec(&envelope)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
 
-        // Build properties
         let options = options.unwrap_or_default();
-        let mut properties = BasicProperties::default()
-            .with_content_type("application/json".into())
-            .with_delivery_mode(2) // Persistent
-            .with_headers(FieldTable::default());
-
-        if let Some(expiration) = options.expiration {
-            properties = properties.with_expiration(expiration.into());
-        }
-
-        if let Some(priority) = options.priority {
-            properties = properties.with_priority(priority);
-        }
-
-        // Publish to default exchange with queue name as routing key
-        let confirm = channel
-            .basic_publish(
-                "", // Default exchange
-                queue,
-                BasicPublishOptions {
-                    mandatory: options.mandatory,
-                    immediate: options.immediate,
-                },
-                &payload,
-                properties,
-            )
+        self.publish_serialized(&channel, "", queue, &payload, &options)
             .await?;
-
-        confirm.await?;
 
         debug!(
             "Published MassTransit message to queue '{}' (type: {})",
@@ -629,35 +585,9 @@ impl Publisher {
         let payload = serde_json::to_vec(envelope)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
 
-        // Build properties
         let options = options.unwrap_or_default();
-        let mut properties = BasicProperties::default()
-            .with_content_type("application/json".into())
-            .with_delivery_mode(2)
-            .with_headers(FieldTable::default());
-
-        if let Some(expiration) = options.expiration {
-            properties = properties.with_expiration(expiration.into());
-        }
-
-        if let Some(priority) = options.priority {
-            properties = properties.with_priority(priority);
-        }
-
-        let confirm = channel
-            .basic_publish(
-                exchange,
-                routing_key,
-                BasicPublishOptions {
-                    mandatory: options.mandatory,
-                    immediate: options.immediate,
-                },
-                &payload,
-                properties,
-            )
+        self.publish_serialized(&channel, exchange, routing_key, &payload, &options)
             .await?;
-
-        confirm.await?;
 
         debug!(
             "Published MassTransit envelope to exchange '{}' with routing key '{}'",
@@ -693,35 +623,9 @@ impl Publisher {
         let payload = serde_json::to_vec(envelope)
             .map_err(|e| RustRabbitError::Serialization(e.to_string()))?;
 
-        // Build properties
         let options = options.unwrap_or_default();
-        let mut properties = BasicProperties::default()
-            .with_content_type("application/json".into())
-            .with_delivery_mode(2)
-            .with_headers(FieldTable::default());
-
-        if let Some(expiration) = options.expiration {
-            properties = properties.with_expiration(expiration.into());
-        }
-
-        if let Some(priority) = options.priority {
-            properties = properties.with_priority(priority);
-        }
-
-        let confirm = channel
-            .basic_publish(
-                "",
-                queue,
-                BasicPublishOptions {
-                    mandatory: options.mandatory,
-                    immediate: options.immediate,
-                },
-                &payload,
-                properties,
-            )
+        self.publish_serialized(&channel, "", queue, &payload, &options)
             .await?;
-
-        confirm.await?;
 
         debug!("Published MassTransit envelope to queue '{}'", queue);
 
