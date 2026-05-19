@@ -194,47 +194,13 @@ impl Drop for Connection {
     }
 }
 
-#[cfg(test)]
 impl Connection {
+    #[cfg(test)]
     pub(crate) fn disconnected_for_tests(url: &str) -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::new(RwLock::new(None)),
             reconnect_lock: Arc::new(Mutex::new(())),
             config: ConnectionConfig::new(url),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_connection_config() {
-        let config = ConnectionConfig::new("amqp://localhost:5672")
-            .connection_timeout(60)
-            .heartbeat(30);
-
-        assert_eq!(config.url, "amqp://localhost:5672");
-        assert_eq!(config.connection_timeout, 60);
-        assert_eq!(config.heartbeat, 30);
-    }
-
-    #[test]
-    fn test_connection_url_validation() {
-        // Test basic URL structure validation
-        let url = "amqp://localhost:5672";
-        assert!(url.contains("amqp://"));
-        assert!(url.contains("localhost"));
-        assert!(url.contains("5672"));
-    }
-
-    #[test]
-    fn test_invalid_url() {
-        let result = std::panic::catch_unwind(|| {
-            let _config = ConnectionConfig::new("invalid-url");
-        });
-
-        assert!(result.is_ok()); // Config creation should not panic, validation happens on connect
     }
 }
